@@ -1,20 +1,105 @@
-import { createApp, ref, computed, watch } from "vue";
-import { GraffitiDecentralized } from "@graffiti-garden/implementation-decentralized";
+import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
-  GraffitiPlugin,
   useGraffiti,
   useGraffitiSession,
   useGraffitiDiscover,
 } from "@graffiti-garden/wrapper-vue";
 
+/** Shared discover channel for chat Create objects (assets/graffiti.md). */
 const DIRECTORY = "hw10-messages-v3-participants";
 
 const NO_CHAT = "hw10-no-chat-selected";
 
+const schemaDirectoryCreate = {
+  properties: {
+    value: {
+      required: ["published", "channel", "activity", "type"],
+      properties: {
+        published: { type: "number" },
+        channel: { type: "string" },
+        activity: { const: "Create" },
+        type: { const: "Chat" },
+        participants: { type: "array", items: { type: "string" } },
+        title: { type: "string" },
+      },
+    },
+  },
+};
+
+const schemaMessage = {
+  properties: {
+    value: {
+      required: ["content", "published"],
+      properties: {
+        content: { type: "string" },
+        published: { type: "number" },
+        mediaType: { type: "string" },
+        activity: { type: "string" },
+        type: { type: "string" },
+        sender: { type: "string" },
+      },
+    },
+  },
+};
+
+const schemaSaveSearch = {
+  properties: {
+    value: {
+      required: ["published", "activity", "name", "query", "sender"],
+      properties: {
+        published: { type: "number" },
+        activity: { const: "SaveSearch" },
+        name: { type: "string" },
+        query: { type: "string" },
+        mediaType: { type: "string" },
+        sender: { type: "string" },
+      },
+    },
+  },
+};
+
+const schemaRecentSearch = {
+  properties: {
+    value: {
+      required: ["published", "activity", "query"],
+      properties: {
+        published: { type: "number" },
+        activity: { const: "RecentSearch" },
+        query: { type: "string" },
+      },
+    },
+  },
+};
+
+const schemaSaveSearchResult = {
+  properties: {
+    value: {
+      required: ["published", "activity", "name", "querySnapshot", "snippet"],
+      properties: {
+        published: { type: "number" },
+        activity: { const: "SaveSearchResult" },
+        name: { type: "string" },
+        querySnapshot: { type: "string" },
+        snippet: { type: "string" },
+        messageUrl: { type: "string" },
+      },
+    },
+  },
+};
+
+function base64UrlFromUtf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/=+/g, "");
+}
+
 function personalPrefsChannel(actor) {
   if (!actor) return NO_CHAT;
-  const id = btoa(unescape(encodeURIComponent(actor))).replace(/=+/g, "");
-  return `personal-prefs-${id}`;
+  return `personal-prefs-${base64UrlFromUtf8(actor)}`;
 }
 
 function dayStartMs(isoDate) {
@@ -31,31 +116,31 @@ function messageActor(obj) {
   return obj.value.sender || obj.actor;
 }
 
-/**
- * Lines that are already Graffiti / AT actor identifiers (use as-is).
- */
 function isExplicitActorId(l) {
   return (
     l.startsWith("graffiti:") || l.startsWith("at://") || l.startsWith("did:")
   );
 }
 
-/**
- * Resolve one recipient line to a canonical actor string.
- * Class handles like name.graffiti.actor must go through Graffiti’s handleToActor
- * so allowed / participants match session.actor (same as the decentralized login).
- */
 async function resolveRecipientLine(graffiti, line) {
-  const l = line.replace(/^@/, "").trim();
-  if (!l) return null;
-  if (isExplicitActorId(l)) return l;
+  const raw = line.replace(/^@/, "").trim();
+  if (!raw) return null;
+  if (isExplicitActorId(raw)) return raw;
+
+  let l = raw;
+  if (
+    !/\.graffiti\.actor$/i.test(raw) &&
+    /^[a-z0-9._-]+$/i.test(raw)
+  ) {
+    l = `${raw}.graffiti.actor`;
+  }
+
   try {
     const resolved = await graffiti.handleToActor(l);
     if (resolved) return resolved;
   } catch (_) {
-    /* fall through */
+    /* ignore */
   }
-  if (/\.graffiti\.actor$/i.test(l) && /^[a-z0-9._-]+$/i.test(l)) return l;
   return null;
 }
 
@@ -74,12 +159,77 @@ async function participantsFromLines(graffiti, session, raw) {
   return { actors: [...actors], invalid };
 }
 
-function setup() {
+function filterChatsForActor(chats, actor) {
+  if (!actor) return [];
+  return chats.filter((c) => {
+    const p = c.value?.participants;
+    if (Array.isArray(p) && p.length > 0) {
+      return p.includes(actor) || c.actor === actor;
+    }
+    if (Array.isArray(c.allowed) && c.allowed.length && c.allowed.includes(actor)) {
+      return true;
+    }
+    return c.actor === actor;
+  });
+}
+
+function mineOnly(objs, actor) {
+  if (!actor) return [];
+  return objs.filter((o) => o.actor === actor);
+}
+
+function buildCreateChatPost(channelId, participants) {
+  return {
+    value: {
+      activity: "Create",
+      type: "Chat",
+      channel: channelId,
+      participants,
+      published: Date.now(),
+    },
+    channels: [DIRECTORY],
+  };
+}
+
+function buildSendMessagePost(threadChannel, content, senderActor) {
+  return {
+    value: {
+      activity: "Send",
+      type: "Message",
+      content,
+      sender: senderActor,
+      mediaType: "text",
+      published: Date.now(),
+    },
+    channels: [threadChannel],
+  };
+}
+
+function isStorageForbiddenError(err) {
+  if (!err) return false;
+  if (err.name === "GraffitiErrorForbidden") return true;
+  const s = String(err.message ?? err);
+  return /403|Forbidden/i.test(s);
+}
+
+function alertGraffitiPostFailed(kind, err) {
+  const detail = err?.message || String(err);
+  if (isStorageForbiddenError(err)) {
+    window.alert(
+      `Graffiti refused to write to your storage (HTTP 403). Each user’s posts upload to that user’s bucket on graffiti.actor first.\n\nTry: log out, clear site data for this origin, log in again. If only some accounts fail, ask course staff whether those Graffiti accounts have storage enabled.\n\nDetails: ${detail}`,
+    );
+    return;
+  }
+  window.alert(`${kind} failed: ${detail}`);
+}
+
+export function useMessagesState() {
   const graffiti = useGraffiti();
   const session = useGraffitiSession();
+  const route = useRoute();
+  const router = useRouter();
 
   const channel = ref(null);
-  const activeAllowedActors = ref([]);
   const myMessage = ref("");
   const composeRecipients = ref("");
   const composeOpen = ref(false);
@@ -88,7 +238,6 @@ function setup() {
   const isDeletingChat = ref(new Set());
   const isCreatingChat = ref(false);
 
-  const sidebarView = ref("chats");
   const searchQuery = ref("");
   const advancedOpen = ref(false);
   const mediaFilter = ref("any");
@@ -96,7 +245,6 @@ function setup() {
   const dateFrom = ref("");
   const dateTo = ref("");
   const searchResults = ref([]);
-  /** When on, search only the thread open in the main panel; when off, search all your chats. */
   const searchOnlyOpenChat = ref(false);
 
   watch(channel, (ch) => {
@@ -109,73 +257,58 @@ function setup() {
 
   const personalCh = computed(() => personalPrefsChannel(session.value?.actor));
 
-  const { objects: chats } = useGraffitiDiscover(
+  /** Public directory — discover without session (assets/graffiti.md). */
+  const { objects: chatsRaw, poll: pollChats } = useGraffitiDiscover(
     [DIRECTORY],
-    {
-      properties: {
-        value: {
-          required: ["published", "channel", "activity", "type"],
-          properties: {
-            published: { type: "number" },
-            channel: { type: "string" },
-            activity: { const: "Create" },
-            type: { const: "Chat" },
-            participants: {
-              type: "array",
-              items: { type: "string" },
-            },
-            title: { type: "string" },
-          },
-        },
-      },
-    },
-    () => session.value,
-    true,
+    schemaDirectoryCreate,
+    undefined,
+    false,
   );
 
-  const myChats = computed(() => {
-    const me = session.value?.actor;
-    if (!me) return [];
-    return chats.value.filter((c) => {
-      const p = c.value.participants;
-      if (Array.isArray(p) && p.length) return p.includes(me);
-      return c.actor === me;
-    });
-  });
+  const myChats = computed(() =>
+    filterChatsForActor(chatsRaw.value, session.value?.actor),
+  );
+
+  function applyChatSelection(ch) {
+    channel.value = ch;
+    composeOpen.value = false;
+    peopleFilter.value = "any";
+    dateFrom.value = "";
+    dateTo.value = "";
+  }
+
+  function syncRouteToState() {
+    const n = route.name;
+    if (n === "home") {
+      channel.value = null;
+      composeOpen.value = false;
+    } else if (n === "compose") {
+      channel.value = null;
+      composeOpen.value = true;
+    } else if (n === "chat" && route.params.chatId) {
+      applyChatSelection(String(route.params.chatId));
+    }
+  }
+
+  watch(() => route.fullPath, syncRouteToState, { immediate: true });
 
   const discoverMessageChannels = computed(() => {
     const ids = [...new Set(myChats.value.map((c) => c.value.channel).filter(Boolean))];
     return ids.length ? ids : [NO_CHAT];
   });
 
-  const messageObjectSchema = {
-    properties: {
-      value: {
-        required: ["content", "published"],
-        properties: {
-          content: { type: "string" },
-          published: { type: "number" },
-          mediaType: { type: "string" },
-          activity: { type: "string" },
-          type: { type: "string" },
-          sender: { type: "string" },
-        },
-      },
-    },
-  };
-
-  const { objects: allMessageObjects } = useGraffitiDiscover(
+  const { objects: allMessageObjects, poll: pollAllMessages } = useGraffitiDiscover(
     () => discoverMessageChannels.value,
-    messageObjectSchema,
-    () => session.value,
-    true,
+    schemaMessage,
+    undefined,
+    false,
   );
 
   const { objects: threadMessageObjects, isFirstPoll: areMessageObjectsLoading } =
     useGraffitiDiscover(
       () => (channel.value ? [channel.value] : [NO_CHAT]),
-      messageObjectSchema,
-      () => session.value,
+      schemaMessage,
+      undefined,
       true,
     );
 
@@ -183,7 +316,6 @@ function setup() {
     threadMessageObjects.value.toSorted((a, b) => a.value.published - b.value.published),
   );
 
-  /** Other people in the thread (not you), deduped and sorted. */
   function rosterActors(chat) {
     const me = session.value?.actor;
     const p = chat.value?.participants;
@@ -201,10 +333,6 @@ function setup() {
     return ob ? rosterActors(ob) : [];
   });
 
-  /**
-   * Everyone you could filter on: all participants across your chats (so people
-   * who have not sent yet still appear), plus any actors seen on messages.
-   */
   const peopleFilterOptions = computed(() => {
     const s = new Set();
     for (const chat of myChats.value) {
@@ -224,64 +352,75 @@ function setup() {
     return [...s].toSorted((a, b) => String(a).localeCompare(String(b)));
   });
 
-  const { objects: saveSearchObjects } = useGraffitiDiscover(
+  const { objects: saveSearchObjectsRaw, poll: pollSavedSearches } = useGraffitiDiscover(
     () => [personalCh.value],
-    {
-      properties: {
-        value: {
-          required: ["published", "activity", "name", "query", "sender"],
-          properties: {
-            published: { type: "number" },
-            activity: { const: "SaveSearch" },
-            name: { type: "string" },
-            query: { type: "string" },
-            mediaType: { type: "string" },
-            sender: { type: "string" },
-          },
-        },
-      },
-    },
-    () => session.value,
-    true,
+    schemaSaveSearch,
+    undefined,
+    false,
   );
 
-  const { objects: recentSearchObjects } = useGraffitiDiscover(
+  const { objects: recentSearchObjectsRaw, poll: pollRecentSearches } = useGraffitiDiscover(
     () => [personalCh.value],
-    {
-      properties: {
-        value: {
-          required: ["published", "activity", "query"],
-          properties: {
-            published: { type: "number" },
-            activity: { const: "RecentSearch" },
-            query: { type: "string" },
-          },
-        },
-      },
-    },
-    () => session.value,
-    true,
+    schemaRecentSearch,
+    undefined,
+    false,
   );
 
-  const { objects: savedResultObjects } = useGraffitiDiscover(
+  const { objects: savedResultObjectsRaw, poll: pollSavedResults } = useGraffitiDiscover(
     () => [personalCh.value],
-    {
-      properties: {
-        value: {
-          required: ["published", "activity", "name", "querySnapshot", "snippet"],
-          properties: {
-            published: { type: "number" },
-            activity: { const: "SaveSearchResult" },
-            name: { type: "string" },
-            querySnapshot: { type: "string" },
-            snippet: { type: "string" },
-            messageUrl: { type: "string" },
-          },
-        },
-      },
+    schemaSaveSearchResult,
+    undefined,
+    false,
+  );
+
+  const saveSearchObjects = computed(() =>
+    mineOnly(saveSearchObjectsRaw.value, session.value?.actor),
+  );
+  const recentSearchObjects = computed(() =>
+    mineOnly(recentSearchObjectsRaw.value, session.value?.actor),
+  );
+  const savedResultObjects = computed(() =>
+    mineOnly(savedResultObjectsRaw.value, session.value?.actor),
+  );
+
+  function pollThreadsAndMessages() {
+    if (!session.value?.actor) return;
+    void pollChats();
+    void pollAllMessages();
+  }
+
+  function pollPersonalObjects() {
+    if (!session.value?.actor) return;
+    void pollSavedSearches();
+    void pollRecentSearches();
+    void pollSavedResults();
+  }
+
+  let pollTimer;
+  onMounted(() => {
+    pollThreadsAndMessages();
+    pollPersonalObjects();
+    pollTimer = setInterval(pollThreadsAndMessages, 15000);
+  });
+  onUnmounted(() => {
+    if (pollTimer) clearInterval(pollTimer);
+  });
+
+  watch(
+    () => session.value?.actor,
+    (actor, prev) => {
+      if (actor && !prev) {
+        pollThreadsAndMessages();
+        pollPersonalObjects();
+      }
     },
-    () => session.value,
-    true,
+  );
+
+  watch(
+    () => route.name,
+    (n) => {
+      if (n === "saved" || n === "search") pollPersonalObjects();
+    },
   );
 
   const recentSearches = computed(() => {
@@ -303,15 +442,8 @@ function setup() {
     savedResultObjects.value.toSorted((a, b) => b.value.published - a.value.published),
   );
 
-  function openCompose() {
-    channel.value = null;
-    activeAllowedActors.value = [];
-    composeOpen.value = true;
-    sidebarView.value = "chats";
-  }
-
-  function closeCompose() {
-    composeOpen.value = false;
+  function goSearch() {
+    router.push({ name: "search" });
   }
 
   async function createConversation() {
@@ -324,7 +456,7 @@ function setup() {
       );
       if (invalid.length) {
         window.alert(
-          `Could not resolve these lines to a Graffiti actor (check spelling, or paste a full at:// / did: / graffiti: id):\n\n${invalid.join("\n")}`,
+          `Could not resolve these lines to a Graffiti actor:\n\n${invalid.join("\n")}\n\nEach person should copy their actor id from the top bar (did:… / at://… / graffiti:…) and paste it here. Bare names only work when Graffiti can resolve the handle.`,
         );
         return;
       }
@@ -335,81 +467,52 @@ function setup() {
         return;
       }
       const newChannel = crypto.randomUUID();
-      const allowed = participants;
       try {
         await graffiti.post(
-          {
-            value: {
-              activity: "Create",
-              type: "Chat",
-              channel: newChannel,
-              participants,
-              published: Date.now(),
-            },
-            channels: [DIRECTORY],
-            allowed,
-          },
+          buildCreateChatPost(newChannel, participants),
           session.value,
         );
       } catch (err) {
-        window.alert(
-          `Could not create chat in Graffiti: ${err?.message || String(err)}\n\nIf handles look right, try pasting each person’s full actor from their session (at://…).`,
-        );
+        if (isStorageForbiddenError(err)) {
+          alertGraffitiPostFailed("Create chat", err);
+        } else {
+          window.alert(
+            `Could not create chat: ${err?.message || String(err)}\n\nPaste full actor ids if handles fail to resolve.`,
+          );
+        }
         return;
       }
       channel.value = newChannel;
-      activeAllowedActors.value = [...allowed];
       composeRecipients.value = "";
       composeOpen.value = false;
-      sidebarView.value = "chats";
+      pollThreadsAndMessages();
+      router.replace({ name: "chat", params: { chatId: newChannel } });
     } finally {
       isCreatingChat.value = false;
     }
   }
 
   function selectChat(ch) {
-    channel.value = ch;
-    composeOpen.value = false;
-    peopleFilter.value = "any";
-    dateFrom.value = "";
-    dateTo.value = "";
-    const ob = myChats.value.find((c) => c.value.channel === ch);
-    const p = ob?.value?.participants;
-    if (Array.isArray(p) && p.length) activeAllowedActors.value = [...p];
-    else if (ob?.allowed?.length) activeAllowedActors.value = [...ob.allowed];
-    else activeAllowedActors.value = session.value?.actor ? [session.value.actor] : [];
-    sidebarView.value = "chats";
+    router.push({ name: "chat", params: { chatId: ch } });
   }
 
   async function sendMessage() {
     if (!channel.value || !myMessage.value.trim()) return;
-    const allowed =
-      activeAllowedActors.value.length > 0
-        ? [...activeAllowedActors.value]
-        : [session.value.actor];
+
     isSending.value = true;
     try {
       try {
         await graffiti.post(
-          {
-            value: {
-              activity: "Send",
-              type: "Message",
-              content: myMessage.value.trim(),
-              sender: session.value.actor,
-              mediaType: "text",
-              published: Date.now(),
-            },
-            channels: [channel.value],
-            allowed,
-          },
+          buildSendMessagePost(
+            channel.value,
+            myMessage.value.trim(),
+            session.value.actor,
+          ),
           session.value,
         );
         myMessage.value = "";
       } catch (err) {
-        window.alert(
-          `Message did not post: ${err?.message || String(err)}\n\nOften this means the thread’s allowed list does not match real Graffiti actors — recreate the chat after everyone uses resolvable handles.`,
-        );
+        alertGraffitiPostFailed("Message", err);
       }
     } finally {
       isSending.value = false;
@@ -438,9 +541,9 @@ function setup() {
     try {
       await graffiti.delete(chatObj, session.value);
       if (channel.value === chatObj.value.channel) {
-        channel.value = null;
-        activeAllowedActors.value = [];
+        router.push({ name: "home" });
       }
+      pollThreadsAndMessages();
     } finally {
       isDeletingChat.value.delete(chatObj.url);
     }
@@ -457,10 +560,10 @@ function setup() {
           published: Date.now(),
         },
         channels: [personalCh.value],
-        allowed: [session.value.actor],
       },
       session.value,
     );
+    pollPersonalObjects();
   }
 
   function messageThreadId(obj) {
@@ -476,7 +579,7 @@ function setup() {
 
   function runSearch() {
     void recordRecentSearch(searchQuery.value);
-    /** Open-thread discover is keyed by channel id; do not rely on `obj.channels` on each object. */
+    pollThreadsAndMessages();
     const pool =
       searchOnlyOpenChat.value && channel.value
         ? threadMessageObjects.value
@@ -514,12 +617,12 @@ function setup() {
 
       return okMedia;
     });
-    sidebarView.value = "results";
+    router.push({ name: "search-results" });
   }
 
   function applyRecent(q) {
     searchQuery.value = q;
-    sidebarView.value = "search";
+    router.push({ name: "search" });
   }
 
   function applySaved(s) {
@@ -529,7 +632,7 @@ function setup() {
     )
       ? s.value.mediaType
       : "any";
-    sidebarView.value = "search";
+    router.push({ name: "search" });
   }
 
   async function saveCurrentSearch() {
@@ -545,10 +648,10 @@ function setup() {
           published: Date.now(),
         },
         channels: [personalCh.value],
-        allowed: [session.value.actor],
       },
       session.value,
     );
+    pollPersonalObjects();
   }
 
   async function pinResult(obj) {
@@ -565,10 +668,10 @@ function setup() {
           published: Date.now(),
         },
         channels: [personalCh.value],
-        allowed: [session.value.actor],
       },
       session.value,
     );
+    pollPersonalObjects();
   }
 
   const isDeletingSaved = ref(new Set());
@@ -583,6 +686,7 @@ function setup() {
       window.alert(`Could not remove: ${err?.message || String(err)}`);
     } finally {
       isDeletingSaved.value.delete(obj.url);
+      pollPersonalObjects();
     }
   }
 
@@ -596,6 +700,7 @@ function setup() {
       window.alert(`Could not remove: ${err?.message || String(err)}`);
     } finally {
       isDeletingSaved.value.delete(obj.url);
+      pollPersonalObjects();
     }
   }
 
@@ -616,7 +721,6 @@ function setup() {
     createConversation,
     chats: myChats,
     selectChat,
-    sidebarView,
     searchQuery,
     advancedOpen,
     mediaFilter,
@@ -640,18 +744,8 @@ function setup() {
     isDeletingSaved,
     deleteSavedSearch,
     deleteSavedPin,
-    activeAllowedActors,
-    openCompose,
-    closeCompose,
     rosterActors,
     selectedRosterActors,
+    goSearch,
   };
 }
-
-const App = { template: "#template", setup };
-
-createApp(App)
-  .use(GraffitiPlugin, {
-    graffiti: new GraffitiDecentralized(),
-  })
-  .mount("#app");

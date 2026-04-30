@@ -1,0 +1,54 @@
+<div class="page-full">
+    <h1 class="page-title">Your conversations</h1>
+    <p class="page-lead">Pick a thread to open it full screen, or start a new chat.</p>
+    <div class="search-row page-search-row">
+        <span aria-hidden="true">🔍</span>
+        <input
+            type="search"
+            v-model="searchQuery"
+            placeholder="Search messages…"
+            @focus="goSearch()"
+        />
+        <router-link class="btn-plus" title="New conversation" :to="{ name: 'compose' }">+</router-link>
+    </div>
+    <div v-if="!chats.length" class="pane-empty page-empty">
+        No conversations yet. Tap <strong>+</strong> to add people and start a thread.
+    </div>
+    <ul v-else class="msg-list page-chat-list">
+        <li v-for="chat in chats" :key="chat.url" class="chat-row">
+            <router-link
+                class="chat-main"
+                :class="{ active: channel === chat.value.channel }"
+                :to="{ name: 'chat', params: { chatId: chat.value.channel } }"
+            >
+                <span class="chat-peer-line">
+                    <template
+                        v-for="(a, i) in rosterActors(chat)"
+                        :key="chat.url + '-' + i + '-' + String(a).slice(-24)"
+                    >
+                        <span class="peer-chip">
+                            <graffiti-actor-to-handle :actor="a" />
+                        </span>
+                        <span
+                            v-if="i < rosterActors(chat).length - 1"
+                            class="peer-sep"
+                            aria-hidden="true"
+                            >·</span
+                        >
+                    </template>
+                </span>
+                <span class="chat-sub">Private thread</span>
+            </router-link>
+            <button
+                v-if="chat.actor === $graffitiSession.value?.actor"
+                type="button"
+                class="chat-del"
+                title="Remove this chat from the directory (you created it)"
+                :disabled="isDeletingChat.has(chat.url)"
+                @click.stop="deleteChat(chat)"
+            >
+                {{ isDeletingChat.has(chat.url) ? "…" : "Delete" }}
+            </button>
+        </li>
+    </ul>
+</div>

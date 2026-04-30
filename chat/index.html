@@ -1,0 +1,40 @@
+<div class="page-full page-chat">
+    <header class="page-chat-toolbar">
+        <router-link class="back-link" :to="{ name: 'home' }">← Chats</router-link>
+    </header>
+    <div class="thread thread-full">
+        <h2 class="thread-title">
+            <template v-if="selectedRosterActors.length">
+                <template
+                    v-for="(a, i) in selectedRosterActors"
+                    :key="'hdr-' + i + '-' + String(a).slice(-24)"
+                >
+                    <span class="peer-chip">
+                        <graffiti-actor-to-handle :actor="a" />
+                    </span>
+                    <span
+                        v-if="i < selectedRosterActors.length - 1"
+                        class="peer-sep"
+                        aria-hidden="true"
+                        >·</span
+                    >
+                </template>
+            </template>
+            <template v-else>Conversation</template>
+        </h2>
+        <p class="thread-sub">Thread messages</p>
+        <p v-if="areMessageObjectsLoading" class="loading">Loading messages…</p>
+        <ul v-else>
+            <Message
+                v-for="object of sortedMessageObjects"
+                :key="object.url"
+                :object="object"
+                :messages="messages"
+            />
+        </ul>
+        <form class="composer" @submit.prevent="sendMessage()">
+            <input type="text" v-model="myMessage" placeholder="Write a message…" />
+            <input type="submit" :value="isSending ? 'Sending…' : 'Send'" :disabled="!myMessage || isSending" />
+        </form>
+    </div>
+</div>

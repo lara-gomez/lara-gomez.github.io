@@ -1,0 +1,28 @@
+<div class="app-shell layout" v-if="$graffitiSession.value">
+    <header class="app-top-nav">
+        <router-link :to="{ name: 'home' }" class="app-brand">Messages</router-link>
+        <nav class="app-nav-links">
+            <router-link :to="{ name: 'home' }" class="nav-tab" :class="{ 'nav-active': navChatsActive }"
+                >Chats</router-link
+            >
+            <router-link :to="{ name: 'search' }" class="nav-tab" :class="{ 'nav-active': navSearchActive }"
+                >Search</router-link
+            >
+            <router-link :to="{ name: 'saved' }" class="nav-tab" :class="{ 'nav-active': navSavedActive }"
+                >Saved</router-link
+            >
+            <router-link
+                class="btn-plus"
+                :class="{ 'nav-active': route.name === 'compose' }"
+                title="New conversation"
+                :to="{ name: 'compose' }"
+                >+</router-link
+            >
+        </nav>
+    </header>
+    <div class="app-outlet">
+        <router-view v-slot="{ Component }">
+            <component v-if="Component" :is="Component" :messages="messages" />
+        </router-view>
+    </div>
+</div>

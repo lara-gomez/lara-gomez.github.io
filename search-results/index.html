@@ -1,0 +1,74 @@
+<div class="page-full">
+    <div class="results-head">
+        <strong>Search results</strong>
+        <router-link :to="{ name: 'search' }">Edit search</router-link>
+    </div>
+    <p
+        v-if="!searchResults.length"
+        style="padding: 12px 16px; margin: 0; color: var(--muted); font-size: 0.9rem"
+    >
+        No messages match. Try different words or filters.
+    </p>
+    <ul v-else class="result-list">
+        <li v-for="obj in searchResults" :key="obj.url">
+            <div v-if="messageThreadId(obj)" class="result-thread">
+                <router-link class="result-open" :to="{ name: 'chat', params: { chatId: messageThreadId(obj) } }">
+                    Open chat
+                </router-link>
+                <span v-if="chatForChannel(messageThreadId(obj))" class="result-peerline">
+                    <template
+                        v-for="(a, i) in rosterActors(chatForChannel(messageThreadId(obj)))"
+                        :key="obj.url + '-rp-' + i"
+                    >
+                        <span class="peer-chip">
+                            <graffiti-actor-to-handle :actor="a" />
+                        </span>
+                        <span
+                            v-if="i < rosterActors(chatForChannel(messageThreadId(obj))).length - 1"
+                            class="peer-sep"
+                            aria-hidden="true"
+                            >·</span
+                        >
+                    </template>
+                </span>
+            </div>
+            <div>
+                <strong>
+                    <graffiti-actor-to-handle :actor="obj.value.sender || obj.actor" />
+                </strong>
+                : {{ obj.value.content }}
+            </div>
+            <div class="pin-row">
+                <button type="button" @click="pinResult(obj)">Save result</button>
+            </div>
+        </li>
+    </ul>
+    <div class="search-panel" style="margin-top: 8px">
+        <h3>Saved results</h3>
+        <p class="adv-note" style="margin-top: 0; margin-bottom: 8px">
+            These are <strong>all</strong> pins you have ever saved — not only matches for this search. Open the
+            <strong>Saved</strong> page to manage them or remove mistakes.
+        </p>
+        <p v-if="!savedPins.length" style="margin: 0; font-size: 0.85rem; color: var(--muted)">
+            Pin hits from search with “Save result”.
+        </p>
+        <ul v-else class="pin-list">
+            <li v-for="p in savedPins" :key="p.url" class="saved-pin-row">
+                <div>
+                    <div style="font-size: 0.8rem; font-weight: 700">{{ p.value.name }}</div>
+                    <div style="font-size: 0.8rem; color: var(--muted)">Query: {{ p.value.querySnapshot }}</div>
+                    <div>{{ p.value.snippet }}</div>
+                </div>
+                <button
+                    type="button"
+                    class="saved-drop"
+                    title="Remove saved result"
+                    :disabled="isDeletingSaved.has(p.url)"
+                    @click="deleteSavedPin(p)"
+                >
+                    {{ isDeletingSaved.has(p.url) ? "…" : "Remove" }}
+                </button>
+            </li>
+        </ul>
+    </div>
+</div>

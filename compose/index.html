@@ -1,0 +1,16 @@
+<div class="page-full">
+<div class="compose-card">
+    <h2>New conversation</h2>
+    <p>Add everyone who should see this thread: one <strong>Graffiti actor</strong> per line.</p>
+    <textarea
+        v-model="composeRecipients"
+        placeholder="One username per line (e.g. friendname) — .graffiti.actor is added automatically. You can still paste at://… or did:… ids."
+    ></textarea>
+    <div class="compose-actions">
+        <router-link class="ghost" :to="{ name: 'home' }">Cancel</router-link>
+        <button type="button" class="primary" :disabled="isCreatingChat" @click="createConversation()">
+            {{ isCreatingChat ? "Starting…" : "Start conversation" }}
+        </button>
+    </div>
+</div>
+</div>

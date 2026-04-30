@@ -1,0 +1,14 @@
+<li>
+    <strong>
+        <graffiti-actor-to-handle :actor="object.value.sender || object.actor" />
+    </strong>
+    : {{ object.value.content }}
+    <button
+        v-if="object.actor === $graffitiSession.value?.actor"
+        type="button"
+        @click="deleteMessage(object)"
+        :disabled="isDeleting.has(object.url)"
+    >
+        {{ isDeleting.has(object.url) ? "Deleting…" : "Delete" }}
+    </button>
+</li>
