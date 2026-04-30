@@ -38,10 +38,14 @@ const schemaMessage = {
         activity: { type: "string" },
         type: { type: "string" },
         sender: { type: "string" },
+        /** URL from `graffiti.postMedia` (see assets/graffiti.md). */
+        attachmentUrl: { type: "string" },
       },
     },
   },
 };
+
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 const schemaSaveSearch = {
   properties: {
@@ -191,16 +195,20 @@ function buildCreateChatPost(channelId, participants) {
   };
 }
 
-function buildSendMessagePost(threadChannel, content, senderActor) {
+function buildSendMessagePost(threadChannel, content, senderActor, attachmentUrl) {
+  const value = {
+    activity: "Send",
+    type: "Message",
+    content: content || "",
+    sender: senderActor,
+    mediaType: attachmentUrl ? "image" : "text",
+    published: Date.now(),
+  };
+  if (attachmentUrl) {
+    value.attachmentUrl = attachmentUrl;
+  }
   return {
-    value: {
-      activity: "Send",
-      type: "Message",
-      content,
-      sender: senderActor,
-      mediaType: "text",
-      published: Date.now(),
-    },
+    value,
     channels: [threadChannel],
   };
 }
@@ -231,6 +239,10 @@ export function useMessagesState() {
 
   const channel = ref(null);
   const myMessage = ref("");
+  /** Pending image for the next send (`File` from `<input type="file">`). */
+  const selectedImageFile = ref(null);
+  /** Bumps to reset the file input after send/clear. */
+  const imageInputKey = ref(0);
   const composeRecipients = ref("");
   const composeOpen = ref(false);
   const isSending = ref(false);
@@ -245,14 +257,70 @@ export function useMessagesState() {
   const dateFrom = ref("");
   const dateTo = ref("");
   const searchResults = ref([]);
-  const searchOnlyOpenChat = ref(false);
 
-  watch(channel, (ch) => {
-    if (!ch) searchOnlyOpenChat.value = false;
+  function handleImageSelect(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      selectedImageFile.value = null;
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      window.alert("Please choose an image file.");
+      selectedImageFile.value = null;
+      event.target.value = "";
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      window.alert("Images must be 25 MB or smaller (Graffiti media limit).");
+      selectedImageFile.value = null;
+      event.target.value = "";
+      return;
+    }
+    selectedImageFile.value = file;
+  }
+
+  function clearPendingImage() {
+    selectedImageFile.value = null;
+    imageInputKey.value += 1;
+  }
+
+  const pendingImageName = computed(() => selectedImageFile.value?.name ?? "");
+
+  watch(channel, (ch, prev) => {
+    if (prev !== ch) clearPendingImage();
   });
 
+  /** `?thread=` on Search / results — null means all conversations. */
+  function normalizeThreadQuery(t) {
+    if (typeof t !== "string") return null;
+    const s = t.trim();
+    return s || null;
+  }
+
+  const searchThreadScopeSelect = computed({
+    get() {
+      return normalizeThreadQuery(route.query.thread) ?? "";
+    },
+    set(v) {
+      const tid = v && String(v).trim() ? String(v).trim() : null;
+      const q = { ...route.query };
+      if (tid) q.thread = tid;
+      else delete q.thread;
+      if (route.name === "search" || route.name === "search-results") {
+        router.replace({ name: route.name, query: q });
+      }
+    },
+  });
+
+  /** Set search scope (channel id or empty for all); used by scope picker UI. */
+  function pickSearchScope(channelId) {
+    searchThreadScopeSelect.value = channelId ? String(channelId) : "";
+  }
+
   const searchRunButtonLabel = computed(() =>
-    searchOnlyOpenChat.value && channel.value ? "Search this chat" : "Search all my chats",
+    normalizeThreadQuery(route.query.thread)
+      ? "Search in this conversation"
+      : "Search all my chats",
   );
 
   const personalCh = computed(() => personalPrefsChannel(session.value?.actor));
@@ -325,6 +393,33 @@ export function useMessagesState() {
       String(a).localeCompare(String(b)),
     );
   }
+
+  /** Plain-text line for `<option>` labels; same tokens as roster order, joined for reading. */
+  function chatScopeOptionLabel(chat) {
+    const others = rosterActors(chat);
+    if (!others.length) return "Conversation";
+    return others
+      .map((a) => {
+        const s = String(a);
+        const at = s.match(/at:\/\/([^/]+)/);
+        if (at) return at[1];
+        const g = s.match(/([a-z0-9_.-]+)\.graffiti\.actor/i);
+        if (g) return g[1];
+        return s.length > 28 ? `${s.slice(0, 26)}…` : s;
+      })
+      .join(" · ");
+  }
+
+  /** Chats ordered by readable title (not Graffiti / channel id order). */
+  const chatsSortedForDisplay = computed(() =>
+    [...myChats.value].toSorted((a, b) => {
+      const la = chatScopeOptionLabel(a);
+      const lb = chatScopeOptionLabel(b);
+      const cmp = la.localeCompare(lb, undefined, { numeric: true, sensitivity: "base" });
+      if (cmp !== 0) return cmp;
+      return String(a.value?.channel || "").localeCompare(String(b.value?.channel || ""));
+    }),
+  );
 
   const selectedRosterActors = computed(() => {
     const ch = channel.value;
@@ -497,20 +592,33 @@ export function useMessagesState() {
   }
 
   async function sendMessage() {
-    if (!channel.value || !myMessage.value.trim()) return;
+    const text = myMessage.value.trim();
+    const file = selectedImageFile.value;
+    if (!channel.value || (!text && !file)) return;
 
     isSending.value = true;
     try {
+      let attachmentUrl;
+      if (file) {
+        try {
+          attachmentUrl = await graffiti.postMedia({ data: file }, session.value);
+        } catch (err) {
+          alertGraffitiPostFailed("Image upload", err);
+          return;
+        }
+      }
       try {
         await graffiti.post(
           buildSendMessagePost(
             channel.value,
-            myMessage.value.trim(),
+            text || (attachmentUrl ? " " : ""),
             session.value.actor,
+            attachmentUrl,
           ),
           session.value,
         );
         myMessage.value = "";
+        clearPendingImage();
       } catch (err) {
         alertGraffitiPostFailed("Message", err);
       }
@@ -522,6 +630,14 @@ export function useMessagesState() {
   async function deleteMessage(message) {
     isDeleting.value.add(message.url);
     try {
+      const mediaUrl = message.value?.attachmentUrl;
+      if (mediaUrl) {
+        try {
+          await graffiti.deleteMedia(mediaUrl, session.value);
+        } catch (e) {
+          console.warn("deleteMedia:", e);
+        }
+      }
       await graffiti.delete(message, session.value);
     } finally {
       isDeleting.value.delete(message.url);
@@ -577,13 +693,20 @@ export function useMessagesState() {
     return myChats.value.find((c) => c.value.channel === cid) ?? null;
   }
 
+  /** Chat row for current `?thread=` (search / search-results); null if all-chats or unknown id. */
+  const searchScopedChat = computed(() => {
+    const tid = normalizeThreadQuery(route.query.thread);
+    if (!tid) return null;
+    return chatForChannel(tid);
+  });
+
   function runSearch() {
     void recordRecentSearch(searchQuery.value);
     pollThreadsAndMessages();
-    const pool =
-      searchOnlyOpenChat.value && channel.value
-        ? threadMessageObjects.value
-        : allMessageObjects.value;
+    const scope = normalizeThreadQuery(route.query.thread);
+    const pool = scope
+      ? allMessageObjects.value.filter((obj) => messageThreadId(obj) === scope)
+      : allMessageObjects.value;
     const q = searchQuery.value.trim().toLowerCase();
     const words = q.split(/\s+/).filter(Boolean);
     const adv = advancedOpen.value;
@@ -610,19 +733,30 @@ export function useMessagesState() {
         okMedia = (obj.value.mediaType || "text") === "text";
       else if (mediaFilter.value === "links") okMedia = /https?:\/\//i.test(content);
       else if (mediaFilter.value === "images")
-        okMedia = /\.(png|jpe?g|gif|webp)/i.test(content);
+        okMedia =
+          (obj.value.mediaType || "") === "image" ||
+          Boolean(obj.value.attachmentUrl) ||
+          /\.(png|jpe?g|gif|webp)/i.test(content);
       else if (mediaFilter.value === "files")
         okMedia = /\.(pdf|zip|docx?)/i.test(content);
       else if (mediaFilter.value === "chat") okMedia = true;
 
       return okMedia;
     });
-    router.push({ name: "search-results" });
+    router.push({
+      name: "search-results",
+      query: scope ? { thread: scope } : {},
+    });
+  }
+
+  function searchRouteThreadQuery() {
+    const t = router.currentRoute.value.query?.thread;
+    return typeof t === "string" && t.trim() ? { thread: t.trim() } : {};
   }
 
   function applyRecent(q) {
     searchQuery.value = q;
-    router.push({ name: "search" });
+    router.push({ name: "search", query: searchRouteThreadQuery() });
   }
 
   function applySaved(s) {
@@ -632,7 +766,7 @@ export function useMessagesState() {
     )
       ? s.value.mediaType
       : "any";
-    router.push({ name: "search" });
+    router.push({ name: "search", query: searchRouteThreadQuery() });
   }
 
   async function saveCurrentSearch() {
@@ -707,6 +841,10 @@ export function useMessagesState() {
   return {
     channel,
     myMessage,
+    imageInputKey,
+    handleImageSelect,
+    clearPendingImage,
+    pendingImageName,
     composeRecipients,
     composeOpen,
     isSending,
@@ -719,17 +857,19 @@ export function useMessagesState() {
     deleteMessage,
     deleteChat,
     createConversation,
-    chats: myChats,
+    chats: chatsSortedForDisplay,
     selectChat,
     searchQuery,
     advancedOpen,
     mediaFilter,
     peopleFilter,
     peopleFilterOptions,
-    searchOnlyOpenChat,
+    searchThreadScopeSelect,
+    pickSearchScope,
     searchRunButtonLabel,
     messageThreadId,
     chatForChannel,
+    searchScopedChat,
     dateFrom,
     dateTo,
     runSearch,

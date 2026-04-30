@@ -1,14 +1,40 @@
-<li>
-    <strong>
-        <graffiti-actor-to-handle :actor="object.value.sender || object.actor" />
-    </strong>
-    : {{ object.value.content }}
-    <button
-        v-if="object.actor === $graffitiSession.value?.actor"
-        type="button"
-        @click="deleteMessage(object)"
-        :disabled="isDeleting.has(object.url)"
-    >
-        {{ isDeleting.has(object.url) ? "Deleting…" : "Delete" }}
-    </button>
+<li class="message-row">
+    <div class="message-meta">
+        <strong>
+            <graffiti-actor-to-handle :actor="object.value.sender || object.actor" />
+        </strong>
+        <span
+            v-if="object.value.content && object.value.content.trim()"
+            class="message-text"
+        >
+            : {{ object.value.content }}
+        </span>
+        <button
+            v-if="object.actor === $graffitiSession.value?.actor"
+            type="button"
+            @click="deleteMessage(object)"
+            :disabled="isDeleting.has(object.url)"
+        >
+            {{ isDeleting.has(object.url) ? "Deleting…" : "Delete" }}
+        </button>
+    </div>
+    <div v-if="object.value.attachmentUrl" class="message-image-block">
+        <div
+            class="message-image"
+            :class="{ 'message-image-expanded': imageExpanded }"
+            role="button"
+            tabindex="0"
+            :aria-expanded="imageExpanded ? 'true' : 'false'"
+            aria-label="Image attachment — tap to expand or collapse"
+            @click="toggleImageExpand"
+            @keydown.enter.prevent="toggleImageExpand"
+            @keydown.space.prevent="toggleImageExpand"
+        >
+            <graffiti-get-media
+                :url="object.value.attachmentUrl"
+                :accept="{ types: ['image/*'] }"
+            ></graffiti-get-media>
+        </div>
+        <p v-if="!imageExpanded" class="message-image-hint">Tap image to enlarge</p>
+    </div>
 </li>

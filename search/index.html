@@ -11,15 +11,54 @@
             Start a chat with <strong>+</strong> first — then search can look through your messages.
         </div>
         <div v-else class="search-scope ok">
-            <p class="search-scope-title">Cross-chat search</p>
+            <p class="search-scope-title">Where to search</p>
             <p style="margin: 0 0 10px; font-size: 0.82rem; color: var(--muted)">
-                By default this looks through <strong>every thread you’re in</strong>. Check the box below to only search
-                the conversation you currently have open (open a chat from Chats first if this is disabled).
+                Choose <strong>All conversations</strong> to search every thread you’re in, or pick one thread to limit
+                results to that chat. From a thread, use <strong>Search this thread</strong> in the header or open Search
+                from the top nav while you’re in that chat — the same scope is stored in the URL as
+                <code class="search-scope-code">?thread=…</code> so you can bookmark it.
             </p>
-            <label class="narrow-opt">
-                <input v-model="searchOnlyOpenChat" type="checkbox" :disabled="!channel" />
-                <span>Only search the open chat</span>
-            </label>
+            <p id="search-scope-label" class="search-scope-label">Search in</p>
+            <div
+                id="search-scope"
+                class="search-scope-pick"
+                role="listbox"
+                aria-labelledby="search-scope-label"
+            >
+                <button
+                    type="button"
+                    class="search-scope-option"
+                    role="option"
+                    :aria-selected="searchThreadScopeSelect === ''"
+                    :class="{ 'search-scope-option-on': searchThreadScopeSelect === '' }"
+                    @click="pickSearchScope('')"
+                >
+                    All conversations
+                </button>
+                <button
+                    v-for="c in chats"
+                    :key="c.url"
+                    type="button"
+                    class="search-scope-option"
+                    role="option"
+                    :aria-selected="searchThreadScopeSelect === c.value.channel"
+                    :class="{ 'search-scope-option-on': searchThreadScopeSelect === c.value.channel }"
+                    @click="pickSearchScope(c.value.channel)"
+                >
+                    <span v-if="!rosterActors(c).length" class="search-scope-peer-fallback">Conversation</span>
+                    <span v-else class="search-scope-peerline chat-peer-line">
+                        <template
+                            v-for="(a, i) in rosterActors(c)"
+                            :key="c.url + '-sc-' + i + '-' + String(a).slice(-24)"
+                        >
+                            <span class="peer-chip">
+                                <graffiti-actor-to-handle :actor="a" />
+                            </span>
+                            <span v-if="i < rosterActors(c).length - 1" class="peer-sep" aria-hidden="true">·</span>
+                        </template>
+                    </span>
+                </button>
+            </div>
         </div>
         <h3 style="margin-top: 4px">Search</h3>
         <p class="adv-note" style="margin-top: 0">

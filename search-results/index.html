@@ -1,8 +1,22 @@
 <div class="page-full">
     <div class="results-head">
         <strong>Search results</strong>
-        <router-link :to="{ name: 'search' }">Edit search</router-link>
+        <router-link :to="{ name: 'search', query: route.query }">Edit search</router-link>
     </div>
+    <p v-if="searchScopedChat" class="results-scope">
+        Scoped to this conversation:
+        <span class="results-scope-peers">
+            <template v-for="(a, i) in rosterActors(searchScopedChat)" :key="'rs-' + i + '-' + String(a).slice(-24)">
+                <span class="peer-chip"><graffiti-actor-to-handle :actor="a" /></span>
+                <span
+                    v-if="i < rosterActors(searchScopedChat).length - 1"
+                    class="peer-sep"
+                    aria-hidden="true"
+                    >·</span
+                >
+            </template>
+        </span>
+    </p>
     <p
         v-if="!searchResults.length"
         style="padding: 12px 16px; margin: 0; color: var(--muted); font-size: 0.9rem"
@@ -36,7 +50,15 @@
                 <strong>
                     <graffiti-actor-to-handle :actor="obj.value.sender || obj.actor" />
                 </strong>
-                : {{ obj.value.content }}
+                <span v-if="obj.value.content && obj.value.content.trim()">
+                    : {{ obj.value.content }}
+                </span>
+            </div>
+            <div v-if="obj.value.attachmentUrl" class="result-thumb">
+                <graffiti-get-media
+                    :url="obj.value.attachmentUrl"
+                    :accept="{ types: ['image/*'] }"
+                ></graffiti-get-media>
             </div>
             <div class="pin-row">
                 <button type="button" @click="pinResult(obj)">Save result</button>

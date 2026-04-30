@@ -7,7 +7,7 @@ export default async () => ({
   },
   components: { Message: MessageAsync },
   setup(props) {
-    return { ...props.messages, messages: props.messages };
+    return { ...props.messages, messages: props.messages, chatId: props.chatId };
   },
   template: await fetch(new URL("./index.html", import.meta.url)).then((r) => r.text()),
 });

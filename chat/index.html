@@ -1,6 +1,12 @@
 <div class="page-full page-chat">
     <header class="page-chat-toolbar">
         <router-link class="back-link" :to="{ name: 'home' }">← Chats</router-link>
+        <router-link
+            v-if="chatId"
+            class="toolbar-search-thread"
+            :to="{ name: 'search', query: { thread: chatId } }"
+            >Search this thread</router-link
+        >
     </header>
     <div class="thread thread-full">
         <h2 class="thread-title">
@@ -32,9 +38,37 @@
                 :messages="messages"
             />
         </ul>
-        <form class="composer" @submit.prevent="sendMessage()">
-            <input type="text" v-model="myMessage" placeholder="Write a message…" />
-            <input type="submit" :value="isSending ? 'Sending…' : 'Send'" :disabled="!myMessage || isSending" />
-        </form>
+        <div class="composer-card">
+            <form class="composer composer-with-media" @submit.prevent="sendMessage()">
+                <label class="composer-photo-btn">
+                    <input
+                        :key="imageInputKey"
+                        type="file"
+                        class="composer-photo-input"
+                        accept="image/*"
+                        @change="handleImageSelect"
+                    />
+                    <span class="composer-photo-label">Add photo</span>
+                </label>
+                <input
+                    type="text"
+                    v-model="myMessage"
+                    placeholder="Write a message… (optional if you attach a photo)"
+                />
+                <input
+                    type="submit"
+                    :value="isSending ? 'Sending…' : 'Send'"
+                    :disabled="isSending || (!myMessage.trim() && !pendingImageName)"
+                />
+            </form>
+            <p v-if="pendingImageName" class="composer-pending">
+                <span class="composer-pending-name" :title="pendingImageName">
+                    Attached: {{ pendingImageName }}
+                </span>
+                <button type="button" class="composer-pending-remove" @click="clearPendingImage">
+                    Remove
+                </button>
+            </p>
+        </div>
     </div>
 </div>
