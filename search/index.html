@@ -1,155 +1,161 @@
-<div class="page-full">
-    <h1 class="page-title">Search</h1>
-    <div class="search-row page-search-row">
-        <span aria-hidden="true">🔍</span>
-        <input type="search" v-model="searchQuery" placeholder="Search messages…" />
-        <router-link class="btn-plus" title="New conversation" :to="{ name: 'compose' }">+</router-link>
-    </div>
-    <div class="search-panel">
-        <div v-if="!chats.length" class="search-scope warn">
-            <strong>No conversations yet.</strong>
-            Start a chat with <strong>+</strong> first — then search can look through your messages.
-        </div>
-        <div v-else class="search-scope ok">
-            <p class="search-scope-title">Where to search</p>
-            <p style="margin: 0 0 10px; font-size: 0.82rem; color: var(--muted)">
-                Choose <strong>All conversations</strong> to search every thread you’re in, or pick one thread to limit
-                results to that chat. From a thread, use <strong>Search this thread</strong> in the header or open Search
-                from the top nav while you’re in that chat — the same scope is stored in the URL as
-                <code class="search-scope-code">?thread=…</code> so you can bookmark it.
-            </p>
-            <p id="search-scope-label" class="search-scope-label">Search in</p>
-            <div
-                id="search-scope"
-                class="search-scope-pick"
-                role="listbox"
-                aria-labelledby="search-scope-label"
-            >
-                <button
-                    type="button"
-                    class="search-scope-option"
-                    role="option"
-                    :aria-selected="searchThreadScopeSelect === ''"
-                    :class="{ 'search-scope-option-on': searchThreadScopeSelect === '' }"
-                    @click="pickSearchScope('')"
-                >
-                    All conversations
-                </button>
-                <button
-                    v-for="c in chats"
-                    :key="c.url"
-                    type="button"
-                    class="search-scope-option"
-                    role="option"
-                    :aria-selected="searchThreadScopeSelect === c.value.channel"
-                    :class="{ 'search-scope-option-on': searchThreadScopeSelect === c.value.channel }"
-                    @click="pickSearchScope(c.value.channel)"
-                >
-                    <span v-if="!rosterActors(c).length" class="search-scope-peer-fallback">Conversation</span>
-                    <span v-else class="search-scope-peerline chat-peer-line">
-                        <template
-                            v-for="(a, i) in rosterActors(c)"
-                            :key="c.url + '-sc-' + i + '-' + String(a).slice(-24)"
+<div class="page-full page-search">
+    <article class="search-sheet">
+        <header class="search-sheet-head">
+            <button type="button" class="search-back-btn" @click="goBack()">← Back</button>
+            <div class="search-sheet-intro">
+                <h1 class="page-title">Search messages</h1>
+                <p class="page-lead">
+                    Find text across your threads, then <strong>pin a hit</strong> with a label — it appears under
+                    <strong>Pinned</strong>.
+                </p>
+            </div>
+        </header>
+
+        <div class="search-sheet-main" :class="{ 'search-sheet-main--solo': !chats.length }">
+            <div class="search-sheet-primary">
+                <form class="search-query-form" @submit.prevent="runSearch()">
+                    <label class="search-query-label" for="search-query-input">Query</label>
+                    <div class="search-query-row">
+                        <span class="search-query-icon" aria-hidden="true">🔍</span>
+                        <input
+                            id="search-query-input"
+                            class="search-query-input"
+                            type="search"
+                            v-model="searchQuery"
+                            placeholder="Words to find…"
+                            autocomplete="off"
+                        />
+                        <button
+                            type="submit"
+                            class="search-go-btn"
+                            :disabled="!chats.length || !searchQuery.trim()"
                         >
-                            <span class="peer-chip">
-                                <graffiti-actor-to-handle :actor="a" />
-                            </span>
-                            <span v-if="i < rosterActors(c).length - 1" class="peer-sep" aria-hidden="true">·</span>
-                        </template>
-                    </span>
-                </button>
-            </div>
-        </div>
-        <h3 style="margin-top: 4px">Search</h3>
-        <p class="adv-note" style="margin-top: 0">
-            Type words above, then <strong>{{ searchRunButtonLabel }}</strong>. Open
-            <strong>Advanced</strong> for media, sender, and dates (across the same scope).
-        </p>
-        <button type="button" class="run-search" :disabled="!chats.length" @click="runSearch()">
-            {{ searchRunButtonLabel }}
-        </button>
-        <button type="button" class="toggle-adv" @click="advancedOpen = !advancedOpen">
-            Advanced search {{ advancedOpen ? "▾" : "▸" }}
-        </button>
-        <div v-show="advancedOpen" class="adv-block">
-            <label for="media">Media type</label>
-            <select id="media" v-model="mediaFilter">
-                <option value="any">Any</option>
-                <option value="text">Text</option>
-                <option value="images">Images</option>
-                <option value="links">Links</option>
-                <option value="files">Files</option>
-                <option value="chat">Chat</option>
-            </select>
-            <label>From person</label>
-            <div class="person-chips">
-                <button type="button" class="p-chip" :class="{ on: peopleFilter === 'any' }" @click="peopleFilter = 'any'">
-                    Anyone
-                </button>
-                <button
-                    v-for="a in peopleFilterOptions"
-                    :key="a"
-                    type="button"
-                    class="p-chip"
-                    :class="{ on: peopleFilter === a }"
-                    @click="peopleFilter = a"
+                            Search
+                        </button>
+                    </div>
+                </form>
+
+                <div v-if="!chats.length" class="pane-empty page-empty search-sheet-empty">
+                    <strong>No conversations yet.</strong>
+                    Open <strong>Chats</strong> and click <strong>+</strong> to start one — then you can search here.
+                </div>
+
+                <section
+                    v-else
+                    class="search-sheet-section search-sheet-section--where"
+                    aria-labelledby="search-where-heading"
                 >
-                    <graffiti-actor-to-handle :actor="a" />
-                </button>
+                    <h2 id="search-where-heading" class="search-section-title">Where</h2>
+                    <p class="search-section-hint">All threads, or one conversation.</p>
+                    <div class="search-scope-pick" role="listbox" aria-label="Search scope">
+                        <button
+                            type="button"
+                            class="search-scope-option"
+                            role="option"
+                            :aria-selected="searchThreadScopeSelect === ''"
+                            :class="{ 'search-scope-option-on': searchThreadScopeSelect === '' }"
+                            @click="pickSearchScope('')"
+                        >
+                            All conversations
+                        </button>
+                        <button
+                            v-for="c in chats"
+                            :key="c.url"
+                            type="button"
+                            class="search-scope-option"
+                            role="option"
+                            :aria-selected="searchThreadScopeSelect === c.value.channel"
+                            :class="{ 'search-scope-option-on': searchThreadScopeSelect === c.value.channel }"
+                            @click="pickSearchScope(c.value.channel)"
+                        >
+                            <span v-if="!rosterActors(c).length" class="search-scope-peer-fallback">Conversation</span>
+                            <span v-else class="search-scope-peerline chat-peer-line">
+                                <template
+                                    v-for="(a, i) in rosterActors(c)"
+                                    :key="c.url + '-sc-' + i + '-' + String(a).slice(-24)"
+                                >
+                                    <span class="peer-chip">
+                                        <graffiti-actor-to-handle :actor="a" />
+                                    </span>
+                                    <span v-if="i < rosterActors(c).length - 1" class="peer-sep" aria-hidden="true"
+                                        >·</span
+                                    >
+                                </template>
+                            </span>
+                        </button>
+                    </div>
+                </section>
             </div>
-            <p class="adv-note" style="margin-bottom: 8px">
-                Everyone in your chats is listed, even if they have not sent a message yet.
-            </p>
-            <div class="date-row">
-                <div>
-                    <label for="df">From date</label>
-                    <input id="df" v-model="dateFrom" type="date" />
-                </div>
-                <div>
-                    <label for="dt">To date</label>
-                    <input id="dt" v-model="dateTo" type="date" />
-                </div>
-            </div>
-        </div>
-        <div class="recent">
-            <h4>Recent searches</h4>
-            <p v-if="!recentSearches.length" style="margin: 0; font-size: 0.85rem; color: var(--muted)">
-                No recent searches yet.
-            </p>
-            <ul>
-                <li v-for="(q, i) in recentSearches" :key="i">
-                    <button type="button" @click="applyRecent(q)">{{ q }}</button>
-                </li>
-            </ul>
-        </div>
-        <div class="saved-searches">
-            <h4>Saved searches (Graffiti, private to you)</h4>
-            <ul class="saved-list">
-                <li v-for="s in mySavedSearches" :key="s.url" class="saved-item-row">
-                    <button type="button" class="saved-apply" @click="applySaved(s)">
-                        <strong>{{ s.value.name }}</strong>
-                        — {{ s.value.query }}
-                    </button>
+
+            <aside v-if="chats.length" class="search-sheet-aside" aria-label="Filters and history">
+                <section class="search-sheet-section" aria-labelledby="search-filters-heading">
+                    <h2 id="search-filters-heading" class="search-section-title">Filters</h2>
+                    <p class="search-section-hint">Optional — sender, message type, date range.</p>
                     <button
                         type="button"
-                        class="saved-drop"
-                        title="Remove saved search"
-                        :disabled="isDeletingSaved.has(s.url)"
-                        @click="deleteSavedSearch(s)"
+                        class="search-filters-toggle"
+                        :disabled="!chats.length"
+                        @click="advancedOpen = !advancedOpen"
                     >
-                        {{ isDeletingSaved.has(s.url) ? "…" : "Remove" }}
+                        <span>{{ advancedOpen ? "Hide options" : "Show options" }}</span>
+                        <span class="search-filters-chevron" :class="{ open: advancedOpen }" aria-hidden="true"></span>
                     </button>
-                </li>
-            </ul>
-            <button
-                type="button"
-                class="run-search"
-                style="margin-top: 10px; background: #475569"
-                :disabled="!searchQuery.trim()"
-                @click="saveCurrentSearch()"
-            >
-                Save this search
-            </button>
+                    <div v-show="advancedOpen" class="adv-block search-adv-inner">
+                        <label for="media">Type</label>
+                        <select id="media" v-model="mediaFilter">
+                            <option value="any">Any</option>
+                            <option value="text">Text only</option>
+                            <option value="images">Images</option>
+                            <option value="links">Links</option>
+                            <option value="files">Files</option>
+                        </select>
+                        <label>From person</label>
+                        <div class="person-chips">
+                            <button
+                                type="button"
+                                class="p-chip"
+                                :class="{ on: peopleFilter === 'any' }"
+                                @click="peopleFilter = 'any'"
+                            >
+                                Anyone
+                            </button>
+                            <button
+                                v-for="a in peopleFilterOptions"
+                                :key="a"
+                                type="button"
+                                class="p-chip"
+                                :class="{ on: peopleFilter === a }"
+                                @click="peopleFilter = a"
+                            >
+                                <graffiti-actor-to-handle :actor="a" />
+                            </button>
+                        </div>
+                        <div class="date-row">
+                            <div>
+                                <label for="df">From date</label>
+                                <input id="df" v-model="dateFrom" type="date" />
+                            </div>
+                            <div>
+                                <label for="dt">To date</label>
+                                <input id="dt" v-model="dateTo" type="date" />
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section
+                    v-if="recentSearches.length"
+                    class="search-sheet-section"
+                    aria-labelledby="search-recent-heading"
+                >
+                    <h2 id="search-recent-heading" class="search-section-title">Recent</h2>
+                    <ul class="search-recent-chips">
+                        <li v-for="(q, i) in recentSearches" :key="i">
+                            <button type="button" class="search-recent-chip" @click="applyRecent(q)">{{ q }}</button>
+                        </li>
+                    </ul>
+                </section>
+            </aside>
         </div>
-    </div>
+    </article>
 </div>

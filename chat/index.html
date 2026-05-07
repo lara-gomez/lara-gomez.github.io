@@ -8,29 +8,72 @@
             >Search this thread</router-link
         >
     </header>
-    <div class="thread thread-full">
-        <h2 class="thread-title">
-            <template v-if="selectedRosterActors.length">
-                <template
-                    v-for="(a, i) in selectedRosterActors"
-                    :key="'hdr-' + i + '-' + String(a).slice(-24)"
-                >
-                    <span class="peer-chip">
+    <section class="thread-people">
+        <div class="thread-people-row">
+            <ul v-if="selectedRosterActors.length" class="thread-roster">
+                <li v-for="a in selectedRosterActors" :key="a" class="roster-chip">
+                    <span class="roster-handle">
                         <graffiti-actor-to-handle :actor="a" />
                     </span>
-                    <span
-                        v-if="i < selectedRosterActors.length - 1"
-                        class="peer-sep"
-                        aria-hidden="true"
-                        >·</span
+                    <button
+                        v-if="canManagePeople"
+                        type="button"
+                        class="roster-x"
+                        title="Remove from chat"
+                        aria-label="Remove from chat"
+                        @click="removeParticipant(currentChat, a)"
                     >
-                </template>
-            </template>
-            <template v-else>Conversation</template>
-        </h2>
-        <p class="thread-sub">Thread messages</p>
+                        ×
+                    </button>
+                </li>
+            </ul>
+            <span v-else class="thread-roster-empty">No other participants</span>
+            <div class="thread-people-actions">
+                <button
+                    v-if="canManagePeople"
+                    type="button"
+                    class="manage-toggle"
+                    @click="isManagingPeople = !isManagingPeople"
+                >
+                    {{ isManagingPeople ? "Cancel" : "Add person" }}
+                </button>
+                <button
+                    v-if="canLeaveChat"
+                    type="button"
+                    class="leave-btn"
+                    @click="leaveChat(currentChat)"
+                >
+                    Leave chat
+                </button>
+            </div>
+        </div>
+        <form
+            v-if="isManagingPeople && canManagePeople"
+            class="manage-add-row"
+            @submit.prevent="addParticipant(currentChat)"
+        >
+            <input
+                type="text"
+                v-model="manageRecipientInput"
+                placeholder="friendname"
+                autocomplete="off"
+                :disabled="isManageAdding"
+            />
+            <button
+                type="submit"
+                class="compose-add-btn"
+                :disabled="isManageAdding || !manageRecipientInput.trim()"
+            >
+                {{ isManageAdding ? "Adding…" : "Add" }}
+            </button>
+        </form>
+    </section>
+    <div class="thread thread-full">
         <p v-if="areMessageObjectsLoading" class="loading">Loading messages…</p>
-        <ul v-else>
+        <ul v-else ref="threadList" class="thread-list">
+            <li v-if="!sortedMessageObjects.length" class="thread-empty">
+                No messages yet — say hi.
+            </li>
             <Message
                 v-for="object of sortedMessageObjects"
                 :key="object.url"
@@ -50,16 +93,22 @@
                     />
                     <span class="composer-photo-label">Add photo</span>
                 </label>
-                <input
-                    type="text"
+                <textarea
+                    ref="composerInput"
+                    class="composer-textarea"
                     v-model="myMessage"
-                    placeholder="Write a message… (optional if you attach a photo)"
-                />
-                <input
+                    rows="1"
+                    placeholder="Write a message… (Shift+Enter for newline)"
+                    @input="onComposerInput"
+                    @keydown.enter.exact.prevent="onComposerEnter"
+                ></textarea>
+                <button
                     type="submit"
-                    :value="isSending ? 'Sending…' : 'Send'"
+                    class="composer-send"
                     :disabled="isSending || (!myMessage.trim() && !pendingImageName)"
-                />
+                >
+                    {{ isSending ? "Sending…" : "Send" }}
+                </button>
             </form>
             <p v-if="pendingImageName" class="composer-pending">
                 <span class="composer-pending-name" :title="pendingImageName">

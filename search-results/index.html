@@ -1,10 +1,11 @@
 <div class="page-full">
-    <div class="results-head">
-        <strong>Search results</strong>
-        <router-link :to="{ name: 'search', query: route.query }">Edit search</router-link>
+    <div class="back-row">
+        <button type="button" class="back-link" @click="goBack()">← Back</button>
+        <router-link class="results-edit" :to="{ name: 'search', query: route.query }">Edit search</router-link>
     </div>
+    <h1 class="page-title">Search results</h1>
     <p v-if="searchScopedChat" class="results-scope">
-        Scoped to this conversation:
+        In:
         <span class="results-scope-peers">
             <template v-for="(a, i) in rosterActors(searchScopedChat)" :key="'rs-' + i + '-' + String(a).slice(-24)">
                 <span class="peer-chip"><graffiti-actor-to-handle :actor="a" /></span>
@@ -17,80 +18,64 @@
             </template>
         </span>
     </p>
+    <p v-else class="results-scope">Across all your conversations</p>
+
     <p
         v-if="!searchResults.length"
-        style="padding: 12px 16px; margin: 0; color: var(--muted); font-size: 0.9rem"
+        class="results-empty"
     >
         No messages match. Try different words or filters.
     </p>
-    <ul v-else class="result-list">
-        <li v-for="obj in searchResults" :key="obj.url">
-            <div v-if="messageThreadId(obj)" class="result-thread">
-                <router-link class="result-open" :to="{ name: 'chat', params: { chatId: messageThreadId(obj) } }">
+    <ul v-else class="result-groups">
+        <li v-for="g in searchResultsByChat" :key="g.threadId || 'unknown'" class="result-group">
+            <header class="result-group-head">
+                <router-link
+                    v-if="g.threadId"
+                    class="result-open"
+                    :to="{ name: 'chat', params: { chatId: g.threadId } }"
+                >
                     Open chat
                 </router-link>
-                <span v-if="chatForChannel(messageThreadId(obj))" class="result-peerline">
+                <span v-if="g.chat" class="result-peerline">
                     <template
-                        v-for="(a, i) in rosterActors(chatForChannel(messageThreadId(obj)))"
-                        :key="obj.url + '-rp-' + i"
+                        v-for="(a, i) in rosterActors(g.chat)"
+                        :key="(g.threadId || 'u') + '-rp-' + i"
                     >
                         <span class="peer-chip">
                             <graffiti-actor-to-handle :actor="a" />
                         </span>
                         <span
-                            v-if="i < rosterActors(chatForChannel(messageThreadId(obj))).length - 1"
+                            v-if="i < rosterActors(g.chat).length - 1"
                             class="peer-sep"
                             aria-hidden="true"
                             >·</span
                         >
                     </template>
                 </span>
-            </div>
-            <div>
-                <strong>
-                    <graffiti-actor-to-handle :actor="obj.value.sender || obj.actor" />
-                </strong>
-                <span v-if="obj.value.content && obj.value.content.trim()">
-                    : {{ obj.value.content }}
-                </span>
-            </div>
-            <div v-if="obj.value.attachmentUrl" class="result-thumb">
-                <graffiti-get-media
-                    :url="obj.value.attachmentUrl"
-                    :accept="{ types: ['image/*'] }"
-                ></graffiti-get-media>
-            </div>
-            <div class="pin-row">
-                <button type="button" @click="pinResult(obj)">Save result</button>
-            </div>
+                <span v-else class="result-peerline result-peerline-unknown">Unknown chat</span>
+                <span class="result-group-count">{{ g.items.length }} match{{ g.items.length === 1 ? '' : 'es' }}</span>
+            </header>
+            <ul class="result-match-list">
+                <li v-for="obj in g.items" :key="obj.url" class="result-match">
+                    <div class="result-match-meta">
+                        <strong>
+                            <graffiti-actor-to-handle :actor="obj.value.sender || obj.actor" />
+                        </strong>
+                        <span v-if="obj.value.content && obj.value.content.trim()" class="result-match-text">
+                            : {{ obj.value.content }}
+                        </span>
+                    </div>
+                    <div v-if="obj.value.attachmentUrl" class="result-thumb">
+                        <graffiti-get-media
+                            :url="obj.value.attachmentUrl"
+                            :accept="{ types: ['image/*'] }"
+                        ></graffiti-get-media>
+                    </div>
+                    <div class="pin-row">
+                        <button type="button" class="pin-btn" @click="pinResult(obj)">📌 Pin message</button>
+                    </div>
+                </li>
+            </ul>
         </li>
     </ul>
-    <div class="search-panel" style="margin-top: 8px">
-        <h3>Saved results</h3>
-        <p class="adv-note" style="margin-top: 0; margin-bottom: 8px">
-            These are <strong>all</strong> pins you have ever saved — not only matches for this search. Open the
-            <strong>Saved</strong> page to manage them or remove mistakes.
-        </p>
-        <p v-if="!savedPins.length" style="margin: 0; font-size: 0.85rem; color: var(--muted)">
-            Pin hits from search with “Save result”.
-        </p>
-        <ul v-else class="pin-list">
-            <li v-for="p in savedPins" :key="p.url" class="saved-pin-row">
-                <div>
-                    <div style="font-size: 0.8rem; font-weight: 700">{{ p.value.name }}</div>
-                    <div style="font-size: 0.8rem; color: var(--muted)">Query: {{ p.value.querySnapshot }}</div>
-                    <div>{{ p.value.snippet }}</div>
-                </div>
-                <button
-                    type="button"
-                    class="saved-drop"
-                    title="Remove saved result"
-                    :disabled="isDeletingSaved.has(p.url)"
-                    @click="deleteSavedPin(p)"
-                >
-                    {{ isDeletingSaved.has(p.url) ? "…" : "Remove" }}
-                </button>
-            </li>
-        </ul>
-    </div>
 </div>

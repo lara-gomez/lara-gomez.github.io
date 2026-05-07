@@ -1,16 +1,52 @@
 <div class="page-full">
-<div class="compose-card">
-    <h2>New conversation</h2>
-    <p>Add everyone who should see this thread: one <strong>Graffiti actor</strong> per line.</p>
-    <textarea
-        v-model="composeRecipients"
-        placeholder="One username per line (e.g. friendname) — .graffiti.actor is added automatically. You can still paste at://… or did:… ids."
-    ></textarea>
-    <div class="compose-actions">
-        <router-link class="ghost" :to="{ name: 'home' }">Cancel</router-link>
-        <button type="button" class="primary" :disabled="isCreatingChat" @click="createConversation()">
-            {{ isCreatingChat ? "Starting…" : "Start conversation" }}
-        </button>
+    <div class="compose-card">
+        <h2>New conversation</h2>
+        <p>Add people one at a time. Type a handle (e.g. <code>friendname</code>) — <code>.graffiti.actor</code> is added automatically. You can also paste an <code>at://…</code> or <code>did:…</code> id.</p>
+        <form class="compose-add-row" @submit.prevent="addPendingRecipient()">
+            <input
+                type="text"
+                v-model="pendingRecipientInput"
+                placeholder="friendname"
+                autocomplete="off"
+                :disabled="isAddingRecipient"
+            />
+            <button
+                type="submit"
+                class="ghost compose-add-btn"
+                :disabled="isAddingRecipient || !pendingRecipientInput.trim()"
+            >
+                {{ isAddingRecipient ? "Adding…" : "Add" }}
+            </button>
+        </form>
+        <p v-if="!pendingRecipients.length" class="compose-empty">
+            No one added yet — add at least one person before starting.
+        </p>
+        <ul v-else class="compose-chip-list">
+            <li v-for="a in pendingRecipients" :key="a" class="compose-chip">
+                <span class="compose-chip-handle">
+                    <graffiti-actor-to-handle :actor="a" />
+                </span>
+                <button
+                    type="button"
+                    class="compose-chip-x"
+                    title="Remove"
+                    aria-label="Remove"
+                    @click="removePendingRecipient(a)"
+                >
+                    ×
+                </button>
+            </li>
+        </ul>
+        <div class="compose-actions">
+            <router-link class="ghost" :to="{ name: 'home' }">Cancel</router-link>
+            <button
+                type="button"
+                class="primary"
+                :disabled="isCreatingChat || !pendingRecipients.length"
+                @click="createConversation()"
+            >
+                {{ isCreatingChat ? "Starting…" : "Start conversation" }}
+            </button>
+        </div>
     </div>
-</div>
 </div>

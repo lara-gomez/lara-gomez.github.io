@@ -27,6 +27,35 @@ const schemaDirectoryCreate = {
   },
 };
 
+const schemaDirectoryUpdate = {
+  properties: {
+    value: {
+      required: ["published", "channel", "activity", "type", "participants"],
+      properties: {
+        published: { type: "number" },
+        channel: { type: "string" },
+        activity: { const: "Update" },
+        type: { const: "Chat" },
+        participants: { type: "array", items: { type: "string" } },
+      },
+    },
+  },
+};
+
+const schemaDirectoryLeave = {
+  properties: {
+    value: {
+      required: ["published", "channel", "activity", "type"],
+      properties: {
+        published: { type: "number" },
+        channel: { type: "string" },
+        activity: { const: "LeaveChat" },
+        type: { const: "Chat" },
+      },
+    },
+  },
+};
+
 const schemaMessage = {
   properties: {
     value: {
@@ -46,22 +75,6 @@ const schemaMessage = {
 };
 
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
-
-const schemaSaveSearch = {
-  properties: {
-    value: {
-      required: ["published", "activity", "name", "query", "sender"],
-      properties: {
-        published: { type: "number" },
-        activity: { const: "SaveSearch" },
-        name: { type: "string" },
-        query: { type: "string" },
-        mediaType: { type: "string" },
-        sender: { type: "string" },
-      },
-    },
-  },
-};
 
 const schemaRecentSearch = {
   properties: {
@@ -148,25 +161,18 @@ async function resolveRecipientLine(graffiti, line) {
   return null;
 }
 
-async function participantsFromLines(graffiti, session, raw) {
-  const lines = raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const actors = new Set([session.actor]);
-  const invalid = [];
-  for (const line of lines) {
-    const a = await resolveRecipientLine(graffiti, line);
-    if (a) actors.add(a);
-    else invalid.push(line);
-  }
-  return { actors: [...actors], invalid };
+function sameParticipantSet(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  const sa = new Set(a);
+  for (const x of b) if (!sa.has(x)) return false;
+  return true;
 }
 
-function filterChatsForActor(chats, actor) {
+function filterChatsForActor(chats, actor, effectiveFn) {
   if (!actor) return [];
   return chats.filter((c) => {
-    const p = c.value?.participants;
+    const p = effectiveFn ? effectiveFn(c) : c.value?.participants;
     if (Array.isArray(p) && p.length > 0) {
       return p.includes(actor) || c.actor === actor;
     }
@@ -243,12 +249,18 @@ export function useMessagesState() {
   const selectedImageFile = ref(null);
   /** Bumps to reset the file input after send/clear. */
   const imageInputKey = ref(0);
-  const composeRecipients = ref("");
+  /** Resolved actor ids (excluding me) chosen one-at-a-time in compose. */
+  const pendingRecipients = ref([]);
+  const pendingRecipientInput = ref("");
+  const isAddingRecipient = ref(false);
   const composeOpen = ref(false);
   const isSending = ref(false);
   const isDeleting = ref(new Set());
   const isDeletingChat = ref(new Set());
   const isCreatingChat = ref(false);
+  const isManagingPeople = ref(false);
+  const manageRecipientInput = ref("");
+  const isManageAdding = ref(false);
 
   const searchQuery = ref("");
   const advancedOpen = ref(false);
@@ -333,8 +345,66 @@ export function useMessagesState() {
     false,
   );
 
+  const { objects: chatUpdatesRaw, poll: pollChatUpdates } = useGraffitiDiscover(
+    [DIRECTORY],
+    schemaDirectoryUpdate,
+    undefined,
+    false,
+  );
+
+  const { objects: chatLeavesRaw, poll: pollChatLeaves } = useGraffitiDiscover(
+    [DIRECTORY],
+    schemaDirectoryLeave,
+    undefined,
+    false,
+  );
+
+  /** channel -> latest valid Update obj (creator-only enforced via effectiveParticipants). */
+  const chatUpdatesByChannel = computed(() => {
+    const map = new Map();
+    for (const u of chatUpdatesRaw.value) {
+      const ch = u.value?.channel;
+      if (!ch) continue;
+      const cur = map.get(ch);
+      if (!cur || (u.value.published || 0) > (cur.value.published || 0)) {
+        map.set(ch, u);
+      }
+    }
+    return map;
+  });
+
+  /** channel -> Set<actor> of self-leavers. */
+  const leavesByChannel = computed(() => {
+    const map = new Map();
+    for (const l of chatLeavesRaw.value) {
+      const ch = l.value?.channel;
+      const a = l.actor;
+      if (!ch || !a) continue;
+      if (!map.has(ch)) map.set(ch, new Set());
+      map.get(ch).add(a);
+    }
+    return map;
+  });
+
+  function effectiveParticipants(chat) {
+    if (!chat?.value?.channel) return [];
+    const ch = chat.value.channel;
+    const update = chatUpdatesByChannel.value.get(ch);
+    const fromUpdate =
+      update &&
+      update.actor === chat.actor &&
+      Array.isArray(update.value.participants)
+        ? update.value.participants
+        : null;
+    const base =
+      fromUpdate || (Array.isArray(chat.value.participants) ? chat.value.participants : []);
+    const left = leavesByChannel.value.get(ch);
+    if (!left || !left.size) return base;
+    return base.filter((a) => !left.has(a));
+  }
+
   const myChats = computed(() =>
-    filterChatsForActor(chatsRaw.value, session.value?.actor),
+    filterChatsForActor(chatsRaw.value, session.value?.actor, effectiveParticipants),
   );
 
   function applyChatSelection(ch) {
@@ -353,8 +423,12 @@ export function useMessagesState() {
     } else if (n === "compose") {
       channel.value = null;
       composeOpen.value = true;
+      pendingRecipients.value = [];
+      pendingRecipientInput.value = "";
     } else if (n === "chat" && route.params.chatId) {
       applyChatSelection(String(route.params.chatId));
+      isManagingPeople.value = false;
+      manageRecipientInput.value = "";
     }
   }
 
@@ -386,9 +460,10 @@ export function useMessagesState() {
 
   function rosterActors(chat) {
     const me = session.value?.actor;
-    const p = chat.value?.participants;
-    if (!Array.isArray(p) || !p.length || !me) return [];
-    const others = p.filter((a) => a && a !== me);
+    if (!me) return [];
+    const eff = effectiveParticipants(chat);
+    if (!eff.length) return [];
+    const others = eff.filter((a) => a && a !== me);
     return [...new Set(others)].toSorted((a, b) =>
       String(a).localeCompare(String(b)),
     );
@@ -447,13 +522,6 @@ export function useMessagesState() {
     return [...s].toSorted((a, b) => String(a).localeCompare(String(b)));
   });
 
-  const { objects: saveSearchObjectsRaw, poll: pollSavedSearches } = useGraffitiDiscover(
-    () => [personalCh.value],
-    schemaSaveSearch,
-    undefined,
-    false,
-  );
-
   const { objects: recentSearchObjectsRaw, poll: pollRecentSearches } = useGraffitiDiscover(
     () => [personalCh.value],
     schemaRecentSearch,
@@ -468,9 +536,6 @@ export function useMessagesState() {
     false,
   );
 
-  const saveSearchObjects = computed(() =>
-    mineOnly(saveSearchObjectsRaw.value, session.value?.actor),
-  );
   const recentSearchObjects = computed(() =>
     mineOnly(recentSearchObjectsRaw.value, session.value?.actor),
   );
@@ -481,12 +546,13 @@ export function useMessagesState() {
   function pollThreadsAndMessages() {
     if (!session.value?.actor) return;
     void pollChats();
+    void pollChatUpdates();
+    void pollChatLeaves();
     void pollAllMessages();
   }
 
   function pollPersonalObjects() {
     if (!session.value?.actor) return;
-    void pollSavedSearches();
     void pollRecentSearches();
     void pollSavedResults();
   }
@@ -537,34 +603,108 @@ export function useMessagesState() {
     savedResultObjects.value.toSorted((a, b) => b.value.published - a.value.published),
   );
 
+  /** Group `searchResults` by thread channel id; null for messages without a known thread. */
+  const searchResultsByChat = computed(() => {
+    const map = new Map();
+    for (const obj of searchResults.value) {
+      const tid = messageThreadId(obj) ?? "(unknown)";
+      if (!map.has(tid)) map.set(tid, []);
+      map.get(tid).push(obj);
+    }
+    const groups = [];
+    for (const [tid, items] of map) {
+      const sorted = items
+        .slice()
+        .toSorted((a, b) => (a.value.published || 0) - (b.value.published || 0));
+      const latest = sorted[sorted.length - 1]?.value.published || 0;
+      groups.push({
+        threadId: tid === "(unknown)" ? null : tid,
+        chat: tid === "(unknown)" ? null : chatForChannel(tid),
+        items: sorted,
+        latest,
+      });
+    }
+    return groups.sort((a, b) => b.latest - a.latest);
+  });
+
   function goSearch() {
     router.push({ name: "search" });
   }
 
+  function goBack() {
+    if (window.history.length > 1) {
+      router.back();
+    } else {
+      router.push({ name: "home" });
+    }
+  }
+
+  async function addPendingRecipient() {
+    const raw = pendingRecipientInput.value.trim();
+    if (!raw) return;
+    isAddingRecipient.value = true;
+    try {
+      const actor = await resolveRecipientLine(graffiti, raw);
+      if (!actor) {
+        window.alert(
+          `Could not resolve "${raw}" to a Graffiti actor.\n\nTry the full handle (e.g. oliviam.graffiti.actor) or paste the actor id (did:… / at://… / graffiti:…) from your friend's top bar.`,
+        );
+        return;
+      }
+      if (actor === session.value?.actor) {
+        window.alert("That's you. Add at least one other person.");
+        return;
+      }
+      if (pendingRecipients.value.includes(actor)) {
+        window.alert("That person is already in the list.");
+        pendingRecipientInput.value = "";
+        return;
+      }
+      pendingRecipients.value = [...pendingRecipients.value, actor];
+      pendingRecipientInput.value = "";
+    } finally {
+      isAddingRecipient.value = false;
+    }
+  }
+
+  function removePendingRecipient(actor) {
+    pendingRecipients.value = pendingRecipients.value.filter((a) => a !== actor);
+  }
+
+  function resetCompose() {
+    pendingRecipients.value = [];
+    pendingRecipientInput.value = "";
+  }
+
   async function createConversation() {
+    if (!session.value?.actor) return;
+    if (!pendingRecipients.value.length) {
+      window.alert(
+        "Add at least one other person before starting the conversation.",
+      );
+      return;
+    }
+    const me = session.value.actor;
+    const fullParticipants = [me, ...pendingRecipients.value];
+
+    const existing = myChats.value.find((c) => {
+      const p = Array.isArray(c.value?.participants) ? c.value.participants : [];
+      return sameParticipantSet(p, fullParticipants);
+    });
+    if (existing) {
+      const ch = existing.value.channel;
+      resetCompose();
+      composeOpen.value = false;
+      router.replace({ name: "chat", params: { chatId: ch } });
+      return;
+    }
+
     isCreatingChat.value = true;
     try {
-      const { actors: participants, invalid } = await participantsFromLines(
-        graffiti,
-        session.value,
-        composeRecipients.value,
-      );
-      if (invalid.length) {
-        window.alert(
-          `Could not resolve these lines to a Graffiti actor:\n\n${invalid.join("\n")}\n\nEach person should copy their actor id from the top bar (did:… / at://… / graffiti:…) and paste it here. Bare names only work when Graffiti can resolve the handle.`,
-        );
-        return;
-      }
-      if (participants.length < 2) {
-        window.alert(
-          "Add at least one other person on their own line (e.g. oliviam.graffiti.actor).",
-        );
-        return;
-      }
       const newChannel = crypto.randomUUID();
       try {
         await graffiti.post(
-          buildCreateChatPost(newChannel, participants),
+          buildCreateChatPost(newChannel, fullParticipants),
           session.value,
         );
       } catch (err) {
@@ -578,7 +718,7 @@ export function useMessagesState() {
         return;
       }
       channel.value = newChannel;
-      composeRecipients.value = "";
+      resetCompose();
       composeOpen.value = false;
       pollThreadsAndMessages();
       router.replace({ name: "chat", params: { chatId: newChannel } });
@@ -589,6 +729,119 @@ export function useMessagesState() {
 
   function selectChat(ch) {
     router.push({ name: "chat", params: { chatId: ch } });
+  }
+
+  const currentChat = computed(() => {
+    if (!channel.value) return null;
+    return chatForChannel(channel.value);
+  });
+
+  const canManagePeople = computed(() => {
+    const c = currentChat.value;
+    return Boolean(c && session.value?.actor && c.actor === session.value.actor);
+  });
+
+  const canLeaveChat = computed(() => {
+    const c = currentChat.value;
+    return Boolean(c && session.value?.actor && c.actor !== session.value.actor);
+  });
+
+  async function postUpdateChat(chatObj, participants) {
+    await graffiti.post(
+      {
+        value: {
+          activity: "Update",
+          type: "Chat",
+          channel: chatObj.value.channel,
+          participants,
+          published: Date.now(),
+        },
+        channels: [DIRECTORY],
+      },
+      session.value,
+    );
+    void pollChatUpdates();
+  }
+
+  async function addParticipant(chatObj) {
+    if (!chatObj || chatObj.actor !== session.value?.actor) return;
+    const raw = manageRecipientInput.value.trim();
+    if (!raw) return;
+    isManageAdding.value = true;
+    try {
+      const actor = await resolveRecipientLine(graffiti, raw);
+      if (!actor) {
+        window.alert(
+          `Could not resolve "${raw}" to a Graffiti actor.\n\nTry the full handle (e.g. oliviam.graffiti.actor) or paste the actor id.`,
+        );
+        return;
+      }
+      const eff = effectiveParticipants(chatObj);
+      if (eff.includes(actor)) {
+        window.alert("That person is already in this chat.");
+        manageRecipientInput.value = "";
+        return;
+      }
+      try {
+        await postUpdateChat(chatObj, [...eff, actor]);
+        manageRecipientInput.value = "";
+        isManagingPeople.value = false;
+      } catch (err) {
+        alertGraffitiPostFailed("Add person", err);
+      }
+    } finally {
+      isManageAdding.value = false;
+    }
+  }
+
+  async function removeParticipant(chatObj, actor) {
+    if (!chatObj || chatObj.actor !== session.value?.actor) return;
+    if (!actor || actor === session.value.actor) return;
+    if (!window.confirm("Remove this person from the chat?")) return;
+    const eff = effectiveParticipants(chatObj);
+    try {
+      await postUpdateChat(chatObj, eff.filter((a) => a !== actor));
+    } catch (err) {
+      alertGraffitiPostFailed("Remove person", err);
+    }
+  }
+
+  async function leaveChat(chatObj) {
+    const me = session.value?.actor;
+    if (!me || !chatObj) return;
+    if (chatObj.actor === me) {
+      window.alert(
+        "You created this chat. Use Delete from the chat list to remove it for everyone.",
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        "Leave this chat? It'll disappear from your list. Other participants keep it.",
+      )
+    ) {
+      return;
+    }
+    try {
+      await graffiti.post(
+        {
+          value: {
+            activity: "LeaveChat",
+            type: "Chat",
+            channel: chatObj.value.channel,
+            published: Date.now(),
+          },
+          channels: [DIRECTORY],
+        },
+        session.value,
+      );
+      void pollChatLeaves();
+      if (channel.value === chatObj.value.channel) {
+        router.push({ name: "home" });
+      }
+    } catch (err) {
+      alertGraffitiPostFailed("Leave chat", err);
+    }
   }
 
   async function sendMessage() {
@@ -759,35 +1012,6 @@ export function useMessagesState() {
     router.push({ name: "search", query: searchRouteThreadQuery() });
   }
 
-  function applySaved(s) {
-    searchQuery.value = s.value.query;
-    mediaFilter.value = ["any", "text", "images", "links", "files", "chat"].includes(
-      s.value.mediaType,
-    )
-      ? s.value.mediaType
-      : "any";
-    router.push({ name: "search", query: searchRouteThreadQuery() });
-  }
-
-  async function saveCurrentSearch() {
-    if (!searchQuery.value.trim()) return;
-    await graffiti.post(
-      {
-        value: {
-          activity: "SaveSearch",
-          name: searchQuery.value.slice(0, 80) || "Saved search",
-          query: searchQuery.value.trim(),
-          mediaType: mediaFilter.value === "any" ? "text" : mediaFilter.value,
-          sender: session.value.actor,
-          published: Date.now(),
-        },
-        channels: [personalCh.value],
-      },
-      session.value,
-    );
-    pollPersonalObjects();
-  }
-
   async function pinResult(obj) {
     const label = window.prompt("Name for this saved result?", "Important message");
     if (!label) return;
@@ -810,17 +1034,30 @@ export function useMessagesState() {
 
   const isDeletingSaved = ref(new Set());
 
-  async function deleteSavedSearch(obj) {
-    const title = (obj.value?.name || "saved search").slice(0, 120);
-    if (!window.confirm(`Remove saved search “${title}”? You can save it again later.`)) return;
-    isDeletingSaved.value.add(obj.url);
+  async function pinMessage(obj) {
+    const label = window.prompt(
+      "Label this pinned message (something you'll find later):",
+      "Important",
+    );
+    if (!label) return;
     try {
-      await graffiti.delete(obj, session.value);
-    } catch (err) {
-      window.alert(`Could not remove: ${err?.message || String(err)}`);
-    } finally {
-      isDeletingSaved.value.delete(obj.url);
+      await graffiti.post(
+        {
+          value: {
+            activity: "SaveSearchResult",
+            name: label.trim(),
+            querySnapshot: "(from chat)",
+            snippet: (obj.value.content || "").slice(0, 2000),
+            messageUrl: obj.url,
+            published: Date.now(),
+          },
+          channels: [personalCh.value],
+        },
+        session.value,
+      );
       pollPersonalObjects();
+    } catch (err) {
+      alertGraffitiPostFailed("Pin message", err);
     }
   }
 
@@ -845,12 +1082,18 @@ export function useMessagesState() {
     handleImageSelect,
     clearPendingImage,
     pendingImageName,
-    composeRecipients,
+    pendingRecipients,
+    pendingRecipientInput,
+    isAddingRecipient,
+    addPendingRecipient,
+    removePendingRecipient,
+    resetCompose,
     composeOpen,
     isSending,
     isDeleting,
     isDeletingChat,
     isCreatingChat,
+    isManagingPeople,
     areMessageObjectsLoading,
     sortedMessageObjects,
     sendMessage,
@@ -874,18 +1117,25 @@ export function useMessagesState() {
     dateTo,
     runSearch,
     searchResults,
+    searchResultsByChat,
     recentSearches,
-    mySavedSearches: saveSearchObjects,
     applyRecent,
-    applySaved,
-    saveCurrentSearch,
     pinResult,
+    pinMessage,
     savedPins,
     isDeletingSaved,
-    deleteSavedSearch,
     deleteSavedPin,
     rosterActors,
     selectedRosterActors,
     goSearch,
+    goBack,
+    currentChat,
+    canManagePeople,
+    canLeaveChat,
+    manageRecipientInput,
+    isManageAdding,
+    addParticipant,
+    removeParticipant,
+    leaveChat,
   };
 }

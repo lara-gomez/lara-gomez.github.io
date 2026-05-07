@@ -1,10 +1,12 @@
 import { computed } from "vue";
 import { useRoute } from "vue-router";
+import { useGraffitiSession } from "@graffiti-garden/wrapper-vue";
 import { useMessagesState } from "../state.js";
 
 function setup() {
   const messages = useMessagesState();
   const route = useRoute();
+  const session = useGraffitiSession();
   const navChatsActive = computed(() =>
     ["home", "chat", "compose"].includes(route.name),
   );
@@ -12,6 +14,9 @@ function setup() {
     ["search", "search-results"].includes(route.name),
   );
   const navSavedActive = computed(() => route.name === "saved");
+  const identityTitle = computed(() =>
+    session.value?.actor ? `Signed in as ${session.value.actor}` : "",
+  );
   return {
     ...messages,
     messages,
@@ -19,6 +24,7 @@ function setup() {
     navChatsActive,
     navSearchActive,
     navSavedActive,
+    identityTitle,
   };
 }
 

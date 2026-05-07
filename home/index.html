@@ -1,18 +1,18 @@
 <div class="page-full">
-    <h1 class="page-title">Your conversations</h1>
-    <p class="page-lead">Pick a thread to open it full screen, or start a new chat.</p>
-    <div class="search-row page-search-row">
-        <span aria-hidden="true">🔍</span>
-        <input
-            type="search"
-            v-model="searchQuery"
-            placeholder="Search messages…"
-            @focus="goSearch()"
-        />
-        <router-link class="btn-plus" title="New conversation" :to="{ name: 'compose' }">+</router-link>
-    </div>
+    <header class="page-chats-header">
+        <h1 class="page-title">Your conversations</h1>
+        <router-link
+            class="btn-plus home-new-chat"
+            title="New conversation"
+            :to="{ name: 'compose' }"
+            >+</router-link
+        >
+    </header>
+    <p class="page-lead">
+        Pick a thread to open it, or tap <strong>+</strong> to start a new one.
+    </p>
     <div v-if="!chats.length" class="pane-empty page-empty">
-        No conversations yet. Tap <strong>+</strong> to add people and start a thread.
+        No conversations yet. Tap <strong>+</strong> above to add people and start a thread.
     </div>
     <ul v-else class="msg-list page-chat-list">
         <li v-for="chat in chats" :key="chat.url" class="chat-row">

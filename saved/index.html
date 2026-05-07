@@ -1,52 +1,32 @@
 <div class="page-full">
-    <h1 class="page-title">Saved</h1>
-    <div class="search-panel">
-        <p class="adv-note" style="margin-top: 0">
-            Named searches and pinned message excerpts live in your personal Graffiti channel. They are
-            <strong>not</strong> filtered by whatever search you last ran — the list is everything you have saved.
-        </p>
-        <h4>Saved searches</h4>
-        <p v-if="!mySavedSearches.length" style="margin: 0 0 10px; font-size: 0.85rem; color: var(--muted)">
-            None yet. Use <strong>Save this search</strong> on the Search page.
-        </p>
-        <ul v-else class="saved-list">
-            <li v-for="s in mySavedSearches" :key="s.url" class="saved-item-row">
-                <button type="button" class="saved-apply" @click="applySaved(s)">
-                    <strong>{{ s.value.name }}</strong>
-                    — {{ s.value.query }}
-                </button>
-                <button
-                    type="button"
-                    class="saved-drop"
-                    title="Remove saved search"
-                    :disabled="isDeletingSaved.has(s.url)"
-                    @click="deleteSavedSearch(s)"
-                >
-                    {{ isDeletingSaved.has(s.url) ? "…" : "Remove" }}
-                </button>
-            </li>
-        </ul>
-        <h4>Saved results</h4>
-        <p v-if="!savedPins.length" style="margin: 0; font-size: 0.85rem; color: var(--muted)">
-            Pin messages from the <strong>Search results</strong> page with “Save result”.
-        </p>
-        <ul v-else class="pin-list">
-            <li v-for="p in savedPins" :key="p.url" class="saved-pin-row">
-                <div>
-                    <div style="font-size: 0.8rem; font-weight: 700">{{ p.value.name }}</div>
-                    <div style="font-size: 0.8rem; color: var(--muted)">Query: {{ p.value.querySnapshot }}</div>
-                    <div>{{ p.value.snippet }}</div>
-                </div>
-                <button
-                    type="button"
-                    class="saved-drop"
-                    title="Remove saved result"
-                    :disabled="isDeletingSaved.has(p.url)"
-                    @click="deleteSavedPin(p)"
-                >
-                    {{ isDeletingSaved.has(p.url) ? "…" : "Remove" }}
-                </button>
-            </li>
-        </ul>
+    <div class="back-row">
+        <button type="button" class="back-link" @click="goBack()">← Back</button>
     </div>
+    <h1 class="page-title">Pinned messages</h1>
+    <p class="page-lead">
+        Messages you've pinned with a label. Pin from any chat (📌 next to a message) or from a search result.
+    </p>
+    <p v-if="!savedPins.length" class="results-empty">
+        Nothing pinned yet. Tap 📌 on any message to save it here.
+    </p>
+    <ul v-else class="pin-list pin-list-page">
+        <li v-for="p in savedPins" :key="p.url" class="saved-pin-row">
+            <div class="saved-pin-body">
+                <div class="saved-pin-name">{{ p.value.name }}</div>
+                <div class="saved-pin-snippet">{{ p.value.snippet }}</div>
+                <div v-if="p.value.querySnapshot && p.value.querySnapshot !== '(from chat)'" class="saved-pin-meta">
+                    Found via search: <em>{{ p.value.querySnapshot }}</em>
+                </div>
+            </div>
+            <button
+                type="button"
+                class="saved-drop"
+                title="Remove pinned message"
+                :disabled="isDeletingSaved.has(p.url)"
+                @click="deleteSavedPin(p)"
+            >
+                {{ isDeletingSaved.has(p.url) ? "…" : "Remove" }}
+            </button>
+        </li>
+    </ul>
 </div>

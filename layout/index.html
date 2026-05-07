@@ -16,15 +16,22 @@
                 >Search</router-link
             >
             <router-link :to="{ name: 'saved' }" class="nav-tab" :class="{ 'nav-active': navSavedActive }"
-                >Saved</router-link
+                >Pinned</router-link
             >
-            <router-link
-                class="btn-plus"
-                :class="{ 'nav-active': route.name === 'compose' }"
-                title="New conversation"
-                :to="{ name: 'compose' }"
-                >+</router-link
-            >
+            <span class="identity-chip" :title="identityTitle">
+                <span class="identity-handle">
+                    <graffiti-actor-to-handle :actor="$graffitiSession.value.actor" />
+                </span>
+                <button
+                    type="button"
+                    class="identity-btn"
+                    title="Log out"
+                    aria-label="Log out"
+                    @click="$graffiti.logout($graffitiSession.value)"
+                >
+                    ⎋
+                </button>
+            </span>
         </nav>
     </header>
     <div class="app-outlet">
@@ -32,4 +39,8 @@
             <component v-if="Component" :is="Component" :messages="messages" />
         </router-view>
     </div>
+</div>
+<div class="layout-loading" v-else-if="$graffitiSession.value === undefined">Loading…</div>
+<div class="layout-signedout" v-else>
+    <button type="button" class="signedout-login" @click="$graffiti.login()">Log in to Messages</button>
 </div>

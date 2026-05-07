@@ -26,25 +26,8 @@
     </head>
     <body>
         <div id="app">Loading…</div>
-        <!-- Shell: auth uses only Graffiti globals. Layout passes messaging state into route views via props. -->
+        <!-- Shell: identity is rendered as a small chip inside the layout top-nav, not a full-width bar. -->
         <template id="template">
-            <div class="auth-bar" v-if="$graffitiSession.value === undefined">
-                <span>Loading…</span>
-            </div>
-            <div class="auth-bar" v-else-if="$graffitiSession.value === null">
-                <span>Messages — sign in to sync chats</span>
-                <button type="button" @click="$graffiti.login()">Log in</button>
-            </div>
-            <div class="auth-bar" v-else>
-                <span>Signed in as</span>
-                <span class="you">
-                    <graffiti-actor-to-handle :actor="$graffitiSession.value.actor" />
-                </span>
-                <span style="opacity: 0.85"
-                    >— others can paste your actor id when they start a chat with you.</span
-                >
-                <button type="button" @click="$graffiti.logout($graffitiSession.value)">Log out</button>
-            </div>
             <router-view></router-view>
         </template>
     </body>

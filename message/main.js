@@ -14,6 +14,7 @@ export const MessageAsync = defineAsyncComponent(async () => ({
     return {
       deleteMessage: props.messages.deleteMessage,
       isDeleting: props.messages.isDeleting,
+      pinMessage: props.messages.pinMessage,
       imageExpanded,
       toggleImageExpand,
     };

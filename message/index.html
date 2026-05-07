@@ -9,14 +9,25 @@
         >
             : {{ object.value.content }}
         </span>
-        <button
-            v-if="object.actor === $graffitiSession.value?.actor"
-            type="button"
-            @click="deleteMessage(object)"
-            :disabled="isDeleting.has(object.url)"
-        >
-            {{ isDeleting.has(object.url) ? "Deleting…" : "Delete" }}
-        </button>
+        <div class="message-actions">
+            <button
+                type="button"
+                class="message-pin"
+                title="Pin this message to your Pinned page"
+                @click="pinMessage(object)"
+            >
+                📌
+            </button>
+            <button
+                v-if="object.actor === $graffitiSession.value?.actor"
+                type="button"
+                class="message-del"
+                @click="deleteMessage(object)"
+                :disabled="isDeleting.has(object.url)"
+            >
+                {{ isDeleting.has(object.url) ? "Deleting…" : "Delete" }}
+            </button>
+        </div>
     </div>
     <div v-if="object.value.attachmentUrl" class="message-image-block">
         <div
