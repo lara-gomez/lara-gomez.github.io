@@ -5,22 +5,12 @@
             <router-link :to="{ name: 'home' }" class="nav-tab" :class="{ 'nav-active': navChatsActive }"
                 >Chats</router-link
             >
-            <router-link
-                :to="
-                    route.name === 'chat' && route.params.chatId
-                        ? { name: 'search', query: { thread: String(route.params.chatId) } }
-                        : { name: 'search' }
-                "
-                class="nav-tab"
-                :class="{ 'nav-active': navSearchActive }"
-                >Search</router-link
-            >
             <router-link :to="{ name: 'saved' }" class="nav-tab" :class="{ 'nav-active': navSavedActive }"
                 >Pinned</router-link
             >
-            <span class="identity-chip" :title="identityTitle">
+            <span class="identity-chip">
                 <span class="identity-handle">
-                    <graffiti-actor-to-handle :actor="$graffitiSession.value.actor" />
+                    <UserName :actor="$graffitiSession.value.actor" />
                 </span>
                 <button
                     type="button"
@@ -39,8 +29,25 @@
             <component v-if="Component" :is="Component" :messages="messages" />
         </router-view>
     </div>
+    <transition name="toast">
+        <div v-if="toast" :key="toast.key" class="toast" role="status">{{ toast.text }}</div>
+    </transition>
 </div>
-<div class="layout-loading" v-else-if="$graffitiSession.value === undefined">Loading…</div>
+<div class="layout-loading" v-else-if="$graffitiSession.value === undefined">
+    <div class="layout-loading-inner">
+        <p v-if="!sessionBootStalled">Loading Graffiti session…</p>
+        <template v-else>
+            <p>Connecting is taking unusually long.</p>
+            <p class="layout-loading-sub">Try signing in again or reload.</p>
+            <div class="layout-loading-actions">
+                <button type="button" class="signedout-login" @click="$graffiti.login()">
+                    Try sign-in
+                </button>
+                <button type="button" class="layout-loading-reload" @click="reloadApp">Reload page</button>
+            </div>
+        </template>
+    </div>
+</div>
 <div class="layout-signedout" v-else>
     <button type="button" class="signedout-login" @click="$graffiti.login()">Log in to Messages</button>
 </div>

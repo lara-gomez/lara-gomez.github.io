@@ -1,7 +1,10 @@
 import { ref, watch, nextTick, onMounted, onUnmounted, computed } from "vue";
+import { useRoute } from "vue-router";
 import { MessageAsync } from "../message/main.js";
 
 const COMPOSER_MAX_HEIGHT_PX = 160;
+const STICK_TO_BOTTOM_THRESHOLD_PX = 80;
+const HIGHLIGHT_DURATION_MS = 1500;
 
 export default async () => ({
   props: {
@@ -10,10 +13,16 @@ export default async () => ({
   },
   components: { Message: MessageAsync },
   setup(props) {
+    const route = useRoute();
     const threadList = ref(null);
     const composerInput = ref(null);
+    /** True iff the user is at (or close to) the bottom of the thread list. */
+    const atBottom = ref(true);
 
-    let resizeObserver;
+    function isNearBottom(el) {
+      if (!el) return true;
+      return el.scrollTop + el.clientHeight >= el.scrollHeight - STICK_TO_BOTTOM_THRESHOLD_PX;
+    }
 
     function scrollThreadToBottom() {
       const el = threadList.value;
@@ -21,28 +30,22 @@ export default async () => ({
       el.scrollTop = el.scrollHeight;
     }
 
-    function scheduleScroll() {
+    /** Always force to bottom (chat open / chat switch / after own send). */
+    function forceScrollToBottom() {
+      atBottom.value = true;
       nextTick(() => {
         scrollThreadToBottom();
         requestAnimationFrame(scrollThreadToBottom);
       });
     }
 
-    function detachResizeObserver() {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-        resizeObserver = undefined;
-      }
-    }
-
-    function attachResizeObserver() {
-      detachResizeObserver();
-      const el = threadList.value;
-      if (!el || typeof ResizeObserver === "undefined") return;
-      resizeObserver = new ResizeObserver(() => {
+    /** Only stick to bottom if user was already there. */
+    function maybeScrollToBottom() {
+      if (!atBottom.value) return;
+      nextTick(() => {
         scrollThreadToBottom();
+        requestAnimationFrame(scrollThreadToBottom);
       });
-      resizeObserver.observe(el);
     }
 
     /** Scroll when list length or last message identity changes (covers edits and long threads). */
@@ -57,34 +60,83 @@ export default async () => ({
       return `${n}|${u}|${pub}|${c}`;
     });
 
-    onMounted(() => {
-      scheduleScroll();
-      nextTick(attachResizeObserver);
-    });
+    const me = computed(() => props.messages.session?.value?.actor ?? null);
 
-    onUnmounted(() => {
-      detachResizeObserver();
+    function onScroll() {
+      atBottom.value = isNearBottom(threadList.value);
+    }
+
+    /** True when the route has a `#m-...` deep link to a specific message. */
+    function hashMessageId() {
+      const h = route.hash || "";
+      return h.startsWith("#m-") ? h.slice(1) : "";
+    }
+
+    /** Scroll the matching `<li>` into view and pulse-highlight it. */
+    function scrollToHashMessage() {
+      const id = hashMessageId();
+      if (!id) return false;
+      const el = document.getElementById(id);
+      if (!el) return false;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.classList.add("message-highlight");
+      window.setTimeout(() => el.classList.remove("message-highlight"), HIGHLIGHT_DURATION_MS);
+      return true;
+    }
+
+    /** Run after layout settles (DOM ids exist + scrollHeight is correct). */
+    function tryScrollToHashMessage() {
+      nextTick(() => {
+        if (scrollToHashMessage()) return;
+        requestAnimationFrame(() => {
+          if (scrollToHashMessage()) return;
+          window.setTimeout(scrollToHashMessage, 80);
+        });
+      });
+    }
+
+    onMounted(() => {
+      if (hashMessageId()) {
+        tryScrollToHashMessage();
+      } else {
+        forceScrollToBottom();
+      }
     });
 
     watch(
       () => props.messages.areMessageObjectsLoading?.value,
       (loading, prev) => {
         if (prev && !loading) {
-          scheduleScroll();
-          nextTick(attachResizeObserver);
+          if (hashMessageId()) tryScrollToHashMessage();
+          else forceScrollToBottom();
         }
       },
     );
 
     watch(threadScrollDigest, () => {
-      scheduleScroll();
+      const arr = props.messages.sortedMessageObjects?.value ?? [];
+      const last = arr[arr.length - 1];
+      const lastSender = last ? (last.value?.sender || last.actor) : null;
+      const isMine = Boolean(lastSender && me.value && lastSender === me.value);
+      if (isMine) {
+        forceScrollToBottom();
+      } else {
+        maybeScrollToBottom();
+      }
     });
 
     watch(
       () => props.chatId,
       () => {
-        scheduleScroll();
-        nextTick(attachResizeObserver);
+        if (hashMessageId()) tryScrollToHashMessage();
+        else forceScrollToBottom();
+      },
+    );
+
+    watch(
+      () => route.hash,
+      (h) => {
+        if (h && h.startsWith("#m-")) tryScrollToHashMessage();
       },
     );
 
@@ -98,7 +150,6 @@ export default async () => ({
 
     function onComposerInput() {
       autoSizeComposer();
-      scheduleScroll();
     }
 
     watch(
@@ -110,7 +161,7 @@ export default async () => ({
       props.messages.sendMessage();
       nextTick(() => {
         autoSizeComposer();
-        scheduleScroll();
+        forceScrollToBottom();
       });
     }
 
@@ -122,6 +173,8 @@ export default async () => ({
       composerInput,
       onComposerInput,
       onComposerEnter,
+      onScroll,
+      atBottom,
     };
   },
   template: await fetch(new URL("./index.html", import.meta.url)).then((r) => r.text()),

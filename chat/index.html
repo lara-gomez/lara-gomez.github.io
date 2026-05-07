@@ -4,16 +4,22 @@
         <router-link
             v-if="chatId"
             class="toolbar-search-thread"
-            :to="{ name: 'search', query: { thread: chatId } }"
+            :to="{ name: 'home', query: { thread: chatId, from: 'thread-search' }, hash: '#search-tools' }"
             >Search this thread</router-link
         >
     </header>
     <section class="thread-people">
+        <div v-if="currentChat && chatResolvedLabel(currentChat)" class="thread-chat-heading">
+            <h1 class="thread-chat-title">{{ chatResolvedLabel(currentChat) }}</h1>
+            <p v-if="!chatCustomTitle(currentChat)" class="thread-chat-label-hint">
+                Only you see this label.
+            </p>
+        </div>
         <div class="thread-people-row">
             <ul v-if="selectedRosterActors.length" class="thread-roster">
                 <li v-for="a in selectedRosterActors" :key="a" class="roster-chip">
                     <span class="roster-handle">
-                        <graffiti-actor-to-handle :actor="a" />
+                        <UserName :actor="a" />
                     </span>
                     <button
                         v-if="canManagePeople"
@@ -29,6 +35,24 @@
             </ul>
             <span v-else class="thread-roster-empty">No other participants</span>
             <div class="thread-people-actions">
+                <button
+                    v-if="$graffitiSession.value?.actor"
+                    type="button"
+                    class="rename-chat-btn"
+                    title="Name or label this conversation"
+                    @click="renameChat(currentChat)"
+                >
+                    Rename…
+                </button>
+                <button
+                    v-if="chatCanRemoveLabel(currentChat)"
+                    type="button"
+                    class="rename-chat-btn thread-remove-label-btn"
+                    title="Clear shared or private label"
+                    @click="removeChatLabel(currentChat)"
+                >
+                    Remove label
+                </button>
                 <button
                     v-if="canManagePeople"
                     type="button"
@@ -70,17 +94,19 @@
     </section>
     <div class="thread thread-full">
         <p v-if="areMessageObjectsLoading" class="loading">Loading messages…</p>
-        <ul v-else ref="threadList" class="thread-list">
-            <li v-if="!sortedMessageObjects.length" class="thread-empty">
-                No messages yet — say hi.
-            </li>
-            <Message
-                v-for="object of sortedMessageObjects"
-                :key="object.url"
-                :object="object"
-                :messages="messages"
-            />
-        </ul>
+        <div v-else ref="threadList" class="thread-scroll" @scroll="onScroll">
+            <ul class="thread-list">
+                <li v-if="!sortedMessageObjects.length" class="thread-empty">
+                    No messages yet — say hi.
+                </li>
+                <Message
+                    v-for="object of sortedMessageObjects"
+                    :key="object.url"
+                    :object="object"
+                    :messages="messages"
+                />
+            </ul>
+        </div>
         <div class="composer-card">
             <form class="composer composer-with-media" @submit.prevent="sendMessage()">
                 <label class="composer-photo-btn">
@@ -98,16 +124,17 @@
                     class="composer-textarea"
                     v-model="myMessage"
                     rows="1"
-                    placeholder="Write a message… (Shift+Enter for newline)"
+                    placeholder="Write a message…"
                     @input="onComposerInput"
                     @keydown.enter.exact.prevent="onComposerEnter"
                 ></textarea>
                 <button
                     type="submit"
                     class="composer-send"
+                    :class="{ 'composer-send-sending': isSending }"
                     :disabled="isSending || (!myMessage.trim() && !pendingImageName)"
                 >
-                    {{ isSending ? "Sending…" : "Send" }}
+                    <span class="composer-send-label">{{ isSending ? "Sending…" : "Send" }}</span>
                 </button>
             </form>
             <p v-if="pendingImageName" class="composer-pending">

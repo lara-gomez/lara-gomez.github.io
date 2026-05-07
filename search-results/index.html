@@ -1,22 +1,13 @@
 <div class="page-full">
     <div class="back-row">
-        <button type="button" class="back-link" @click="goBack()">← Back</button>
-        <router-link class="results-edit" :to="{ name: 'search', query: route.query }">Edit search</router-link>
+        <router-link class="back-link" :to="{ name: 'home', query: route.query, hash: '#search-tools' }"
+            >← Change search</router-link
+        >
     </div>
     <h1 class="page-title">Search results</h1>
     <p v-if="searchScopedChat" class="results-scope">
         In:
-        <span class="results-scope-peers">
-            <template v-for="(a, i) in rosterActors(searchScopedChat)" :key="'rs-' + i + '-' + String(a).slice(-24)">
-                <span class="peer-chip"><graffiti-actor-to-handle :actor="a" /></span>
-                <span
-                    v-if="i < rosterActors(searchScopedChat).length - 1"
-                    class="peer-sep"
-                    aria-hidden="true"
-                    >·</span
-                >
-            </template>
-        </span>
+        <span class="results-scope-name">{{ chatScopeOptionLabel(searchScopedChat) }}</span>
     </p>
     <p v-else class="results-scope">Across all your conversations</p>
 
@@ -36,22 +27,7 @@
                 >
                     Open chat
                 </router-link>
-                <span v-if="g.chat" class="result-peerline">
-                    <template
-                        v-for="(a, i) in rosterActors(g.chat)"
-                        :key="(g.threadId || 'u') + '-rp-' + i"
-                    >
-                        <span class="peer-chip">
-                            <graffiti-actor-to-handle :actor="a" />
-                        </span>
-                        <span
-                            v-if="i < rosterActors(g.chat).length - 1"
-                            class="peer-sep"
-                            aria-hidden="true"
-                            >·</span
-                        >
-                    </template>
-                </span>
+                <span v-if="g.chat" class="result-peerline">{{ chatScopeOptionLabel(g.chat) }}</span>
                 <span v-else class="result-peerline result-peerline-unknown">Unknown chat</span>
                 <span class="result-group-count">{{ g.items.length }} match{{ g.items.length === 1 ? '' : 'es' }}</span>
             </header>
@@ -59,12 +35,23 @@
                 <li v-for="obj in g.items" :key="obj.url" class="result-match">
                     <div class="result-match-meta">
                         <strong>
-                            <graffiti-actor-to-handle :actor="obj.value.sender || obj.actor" />
+                            <UserName :actor="obj.value.sender || obj.actor" />
                         </strong>
+                        <span v-if="formatPublished(obj.value.published)" class="result-match-time">
+                            {{ formatPublished(obj.value.published) }}
+                        </span>
                         <span v-if="obj.value.content && obj.value.content.trim()" class="result-match-text">
-                            : {{ obj.value.content }}
+                            : <LinkedText :text="previewSnippet(obj)" :highlight-words="queryWords" />
                         </span>
                     </div>
+                    <button
+                        v-if="resultCanExpand(obj)"
+                        type="button"
+                        class="result-expand-btn"
+                        @click="toggleResultExpanded(obj)"
+                    >
+                        {{ resultExpanded(obj) ? "Show less" : "Show more" }}
+                    </button>
                     <div v-if="obj.value.attachmentUrl" class="result-thumb">
                         <graffiti-get-media
                             :url="obj.value.attachmentUrl"

@@ -1,7 +1,7 @@
 <div class="page-full">
     <div class="compose-card">
         <h2>New conversation</h2>
-        <p>Add people one at a time. Type a handle (e.g. <code>friendname</code>) — <code>.graffiti.actor</code> is added automatically. You can also paste an <code>at://…</code> or <code>did:…</code> id.</p>
+        <p>Add people one at a time.</p>
         <form class="compose-add-row" @submit.prevent="addPendingRecipient()">
             <input
                 type="text"
@@ -24,7 +24,7 @@
         <ul v-else class="compose-chip-list">
             <li v-for="a in pendingRecipients" :key="a" class="compose-chip">
                 <span class="compose-chip-handle">
-                    <graffiti-actor-to-handle :actor="a" />
+                    <UserName :actor="a" />
                 </span>
                 <button
                     type="button"

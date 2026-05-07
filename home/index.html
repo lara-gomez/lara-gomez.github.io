@@ -1,54 +1,274 @@
-<div class="page-full">
+<div class="page-full page-home">
     <header class="page-chats-header">
         <h1 class="page-title">Your conversations</h1>
+    </header>
+
+    <article id="search-tools" class="search-sheet home-embedded-search home-search-compact" aria-label="Search messages">
+        <form class="home-search-form" @submit.prevent="runSearch()">
+            <div class="home-search-toolbar">
+                <div class="search-query-row home-search-query-row">
+                    <span class="search-query-icon" aria-hidden="true">🔍</span>
+                    <input
+                        id="search-query-input"
+                        class="search-query-input"
+                        type="search"
+                        v-model="searchQuery"
+                        placeholder="Search messages…"
+                        autocomplete="off"
+                        aria-label="Search messages"
+                        :disabled="!chats.length"
+                    />
+                    <button
+                        type="submit"
+                        class="search-go-btn"
+                        :disabled="!chats.length || !searchQuery.trim()"
+                    >
+                        Search
+                    </button>
+                </div>
+                <div
+                    v-if="chats.length"
+                    class="home-search-details"
+                    :class="{ open: optionsOpen }"
+                    ref="optionsRoot"
+                >
+                    <button
+                        type="button"
+                        class="home-search-details-summary"
+                        :aria-expanded="optionsOpen ? 'true' : 'false'"
+                        @click="toggleOptions"
+                    >
+                        <span class="home-search-details-summary-text">Options</span>
+                        <span class="home-search-details-chevron" aria-hidden="true"></span>
+                    </button>
+                    <div
+                        class="home-search-details-panel"
+                        :aria-hidden="optionsOpen ? 'false' : 'true'"
+                    >
+                        <div class="home-search-panel-section">
+                            <label class="home-search-panel-label" for="home-scope-select">Search in</label>
+                            <select
+                                id="home-scope-select"
+                                class="home-scope-select"
+                                :value="searchScopeSelectValue"
+                                @change="pickSearchScope($event.target.value)"
+                            >
+                                <option value="">All chats</option>
+                                <option
+                                    v-for="c in chats"
+                                    :key="c.url"
+                                    :value="chatScopeOptionValue(c)"
+                                >
+                                    {{ chatScopeOptionLabel(c) }}
+                                </option>
+                                <option
+                                    v-if="searchScopeOrphanNeeded"
+                                    :value="searchScopeSelectValue"
+                                >
+                                    {{ searchScopeOrphanLabel }}
+                                </option>
+                            </select>
+                        </div>
+                        <div class="home-search-panel-section">
+                            <label class="home-search-panel-label" for="media-home">Message type</label>
+                            <select id="media-home" v-model="mediaFilter">
+                                <option value="any">Any</option>
+                                <option value="text">Text only</option>
+                                <option value="images">Images</option>
+                                <option value="links">Links</option>
+                                <option value="files">Files</option>
+                            </select>
+                        </div>
+                        <div class="home-search-panel-section">
+                            <span class="home-search-panel-label">From person</span>
+                            <div class="person-chips home-search-person-chips">
+                                <button
+                                    type="button"
+                                    class="p-chip"
+                                    :class="{ on: peopleFilter === 'any' }"
+                                    @click="peopleFilter = 'any'"
+                                >
+                                    Anyone
+                                </button>
+                                <button
+                                    v-for="a in peopleFilterOptions"
+                                    :key="a"
+                                    type="button"
+                                    class="p-chip"
+                                    :class="{ on: peopleFilter === a }"
+                                    @click="peopleFilter = a"
+                                >
+                                    <UserName :actor="a" />
+                                </button>
+                            </div>
+                        </div>
+                        <div class="home-search-panel-section home-search-dates">
+                            <div>
+                                <label class="home-search-panel-label" for="df-home">From date</label>
+                                <input id="df-home" v-model="dateFrom" type="date" />
+                            </div>
+                            <div>
+                                <label class="home-search-panel-label" for="dt-home">To date</label>
+                                <input id="dt-home" v-model="dateTo" type="date" />
+                            </div>
+                        </div>
+                        <div
+                            v-if="recentSearches.length"
+                            class="home-search-panel-section home-search-panel-recent"
+                        >
+                            <span class="home-search-panel-label" id="search-recent-heading">Recent</span>
+                            <ul class="search-recent-chips home-recent-chips" aria-labelledby="search-recent-heading">
+                                <li v-for="(q, i) in recentSearches" :key="i">
+                                    <button type="button" class="search-recent-chip" @click="applyRecent(q)">
+                                        {{ q }}
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div v-if="chats.length" class="home-search-scope-status">
+                <span class="home-search-scope-status-label">In:</span>
+                <span class="home-search-scope-status-value">{{ searchScopeSummaryLabel }}</span>
+                <button
+                    v-if="searchScopeSelectValue"
+                    type="button"
+                    class="home-search-scope-clear"
+                    @click="pickSearchScope('')"
+                >
+                    All chats
+                </button>
+            </div>
+        </form>
+
+        <div v-if="!chats.length" class="pane-empty page-empty search-sheet-empty home-search-empty">
+            <strong>No conversations yet.</strong>
+            Tap <strong>+</strong> to start one — then you can search here.
+        </div>
+    </article>
+    <div class="home-list-toolbar">
+        <span class="home-list-toolbar-label">Conversations</span>
         <router-link
-            class="btn-plus home-new-chat"
-            title="New conversation"
+            class="btn-plus home-new-chat home-new-chat-emphasis"
+            title="Start a new conversation"
+            aria-label="Start a new conversation"
             :to="{ name: 'compose' }"
             >+</router-link
         >
-    </header>
-    <p class="page-lead">
-        Pick a thread to open it, or tap <strong>+</strong> to start a new one.
-    </p>
-    <div v-if="!chats.length" class="pane-empty page-empty">
-        No conversations yet. Tap <strong>+</strong> above to add people and start a thread.
     </div>
-    <ul v-else class="msg-list page-chat-list">
-        <li v-for="chat in chats" :key="chat.url" class="chat-row">
+    <ul v-if="chats.length" class="msg-list page-chat-list">
+        <li
+            v-for="chat in chats"
+            :key="chat.url"
+            class="chat-row"
+            :class="{ 'chat-row-menu-open': openChatMenuKey === chatMenuKey(chat) }"
+        >
             <router-link
                 class="chat-main"
-                :class="{ active: channel === chat.value.channel }"
+                :class="{
+                    active: String(channel || '') === String(chat.value.channel || ''),
+                    'chat-row-unread': chatIsUnread(chat),
+                }"
                 :to="{ name: 'chat', params: { chatId: chat.value.channel } }"
             >
-                <span class="chat-peer-line">
-                    <template
-                        v-for="(a, i) in rosterActors(chat)"
-                        :key="chat.url + '-' + i + '-' + String(a).slice(-24)"
-                    >
-                        <span class="peer-chip">
-                            <graffiti-actor-to-handle :actor="a" />
-                        </span>
-                        <span
-                            v-if="i < rosterActors(chat).length - 1"
-                            class="peer-sep"
-                            aria-hidden="true"
-                            >·</span
-                        >
-                    </template>
+                <span v-if="chatResolvedLabel(chat)" class="chat-title-row">
+                    <span class="chat-title">{{ chatResolvedLabel(chat) }}</span>
+                    <span
+                        v-if="chatIsUnread(chat)"
+                        class="chat-unread-dot"
+                        title="Unread messages"
+                        aria-label="Unread messages"
+                    ></span>
                 </span>
-                <span class="chat-sub">Private thread</span>
+                <span
+                    class="chat-title-row"
+                    :class="{ 'chat-peer-primary': !chatResolvedLabel(chat) }"
+                >
+                    <span
+                        class="chat-peer-line"
+                        :class="{ 'chat-peer-line-muted': chatResolvedLabel(chat) }"
+                    >
+                        <template v-if="rosterActors(chat).length">
+                            <template
+                                v-for="(a, i) in rosterActors(chat)"
+                                :key="chat.url + '-' + i + '-' + String(a).slice(-24)"
+                            >
+                                <span class="peer-chip">
+                                    <UserName :actor="a" />
+                                </span>
+                                <span
+                                    v-if="i < rosterActors(chat).length - 1"
+                                    class="peer-sep"
+                                    aria-hidden="true"
+                                    >·</span
+                                >
+                            </template>
+                        </template>
+                        <span v-else class="chat-peer-fallback">Conversation</span>
+                    </span>
+                    <span
+                        v-if="!chatResolvedLabel(chat) && chatIsUnread(chat)"
+                        class="chat-unread-dot"
+                        title="Unread messages"
+                        aria-label="Unread messages"
+                    ></span>
+                </span>
+                <span v-if="chatLastPreview(chat)" class="chat-last-preview">{{
+                    chatLastPreview(chat)
+                }}</span>
+                <span v-else class="chat-sub">Private thread</span>
+                <div
+                    v-if="$graffitiSession.value?.actor"
+                    class="message-menu chat-bubble-menu"
+                    :ref="(el) => setChatMenuRef(chat, el)"
+                    @click.stop
+                >
+                    <button
+                        type="button"
+                        class="kebab-btn chat-bubble-kebab"
+                        title="Conversation actions"
+                        aria-label="Conversation actions"
+                        :aria-expanded="openChatMenuKey === chatMenuKey(chat) ? 'true' : 'false'"
+                        @click.stop.prevent="toggleChatMenu(chat)"
+                    >
+                        ⋯
+                    </button>
+                    <div
+                        v-if="openChatMenuKey === chatMenuKey(chat)"
+                        class="message-menu-pop"
+                        role="menu"
+                    >
+                        <button
+                            type="button"
+                            class="message-menu-item"
+                            role="menuitem"
+                            @click.stop.prevent="renameChatFromMenu(chat)"
+                        >
+                            Rename…
+                        </button>
+                        <button
+                            v-if="chatCanRemoveLabel(chat)"
+                            type="button"
+                            class="message-menu-item"
+                            role="menuitem"
+                            @click.stop.prevent="removeChatLabelFromMenu(chat)"
+                        >
+                            Remove label
+                        </button>
+                        <button
+                            v-if="chat.actor === $graffitiSession.value?.actor"
+                            type="button"
+                            class="message-menu-item message-menu-danger"
+                            role="menuitem"
+                            :disabled="isDeletingChat.has(chat.url)"
+                            @click.stop.prevent="deleteChatFromMenu(chat)"
+                        >
+                            {{ isDeletingChat.has(chat.url) ? "Deleting…" : "Delete chat" }}
+                        </button>
+                    </div>
+                </div>
             </router-link>
-            <button
-                v-if="chat.actor === $graffitiSession.value?.actor"
-                type="button"
-                class="chat-del"
-                title="Remove this chat from the directory (you created it)"
-                :disabled="isDeletingChat.has(chat.url)"
-                @click.stop="deleteChat(chat)"
-            >
-                {{ isDeletingChat.has(chat.url) ? "…" : "Delete" }}
-            </button>
         </li>
     </ul>
 </div>

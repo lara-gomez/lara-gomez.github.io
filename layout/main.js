@@ -1,30 +1,55 @@
-import { computed } from "vue";
+import { computed, watch, ref, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { useGraffitiSession } from "@graffiti-garden/wrapper-vue";
 import { useMessagesState } from "../state.js";
+
+const SESSION_BOOT_WARNING_MS = 12000;
 
 function setup() {
   const messages = useMessagesState();
   const route = useRoute();
   const session = useGraffitiSession();
+  const sessionBootStalled = ref(false);
+  let bootTimer;
+
+  function clearBootTimer() {
+    if (bootTimer !== undefined) {
+      clearTimeout(bootTimer);
+      bootTimer = undefined;
+    }
+  }
+
+  watch(
+    () => session.value,
+    (v) => {
+      clearBootTimer();
+      sessionBootStalled.value = false;
+      if (v !== undefined) return;
+      bootTimer = window.setTimeout(() => {
+        if (session.value === undefined) sessionBootStalled.value = true;
+      }, SESSION_BOOT_WARNING_MS);
+    },
+    { immediate: true },
+  );
+
+  onUnmounted(() => clearBootTimer());
+
+  function reloadApp() {
+    window.location.reload();
+  }
+
   const navChatsActive = computed(() =>
     ["home", "chat", "compose"].includes(route.name),
   );
-  const navSearchActive = computed(() =>
-    ["search", "search-results"].includes(route.name),
-  );
   const navSavedActive = computed(() => route.name === "saved");
-  const identityTitle = computed(() =>
-    session.value?.actor ? `Signed in as ${session.value.actor}` : "",
-  );
   return {
     ...messages,
     messages,
     route,
     navChatsActive,
-    navSearchActive,
     navSavedActive,
-    identityTitle,
+    sessionBootStalled,
+    reloadApp,
   };
 }
 

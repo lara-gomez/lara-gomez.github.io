@@ -2,6 +2,7 @@ import { createApp, watch, defineAsyncComponent } from "vue";
 import { createRouter, createWebHashHistory, useRoute, useRouter } from "vue-router";
 import { GraffitiDecentralized } from "@graffiti-garden/implementation-decentralized";
 import { GraffitiPlugin, useGraffitiSession } from "@graffiti-garden/wrapper-vue";
+import { UserName } from "./username/main.js";
 
 function loadComponent(name) {
   return () => import(`./${name}/main.js`).then((m) => m.default());
@@ -18,7 +19,10 @@ const router = createRouter({
         { path: "", name: "home", component: loadComponent("home") },
         { path: "compose", name: "compose", component: loadComponent("compose") },
         { path: "chat/:chatId", name: "chat", component: loadComponent("chat"), props: true },
-        { path: "search", name: "search", component: loadComponent("search") },
+        {
+          path: "search",
+          redirect: (to) => ({ name: "home", query: to.query, hash: to.hash || "#search-tools" }),
+        },
         {
           path: "search/results",
           name: "search-results",
@@ -30,7 +34,7 @@ const router = createRouter({
   ],
 });
 
-createApp({
+const app = createApp({
   template: "#template",
   components: {
     Home: defineAsyncComponent(loadComponent("home")),
@@ -53,7 +57,11 @@ createApp({
     );
     return {};
   },
-})
+});
+
+app.component("UserName", UserName);
+
+app
   .use(router)
   .use(GraffitiPlugin, { graffiti: new GraffitiDecentralized() })
   .mount("#app");

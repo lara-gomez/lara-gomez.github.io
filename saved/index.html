@@ -4,29 +4,72 @@
     </div>
     <h1 class="page-title">Pinned messages</h1>
     <p class="page-lead">
-        Messages you've pinned with a label. Pin from any chat (📌 next to a message) or from a search result.
+        Tap a pinned message to jump back into the chat where it lives. Pin from any chat or search result.
     </p>
     <p v-if="!savedPins.length" class="results-empty">
-        Nothing pinned yet. Tap 📌 on any message to save it here.
+        Nothing pinned yet. Open a chat and use the ⋯ menu on a message to pin it.
     </p>
     <ul v-else class="pin-list pin-list-page">
         <li v-for="p in savedPins" :key="p.url" class="saved-pin-row">
-            <div class="saved-pin-body">
-                <div class="saved-pin-name">{{ p.value.name }}</div>
-                <div class="saved-pin-snippet">{{ p.value.snippet }}</div>
-                <div v-if="p.value.querySnapshot && p.value.querySnapshot !== '(from chat)'" class="saved-pin-meta">
-                    Found via search: <em>{{ p.value.querySnapshot }}</em>
+            <component
+                :is="pinIsLinkable(p) ? 'router-link' : 'div'"
+                v-bind="pinIsLinkable(p)
+                    ? {
+                          to: {
+                              name: 'chat',
+                              params: { chatId: p.value.threadChannel },
+                              hash: pinAnchor(p),
+                          },
+                      }
+                    : {}"
+                class="saved-pin-link"
+                :class="{ 'saved-pin-link-static': !pinIsLinkable(p) }"
+            >
+                <div class="saved-pin-body">
+                    <div class="saved-pin-name">{{ p.value.name }}</div>
+                    <div class="saved-pin-snippet">{{ pinPreviewText(p) }}</div>
+                    <button
+                        v-if="pinHasLongText(p)"
+                        type="button"
+                        class="saved-pin-expand"
+                        @click.stop.prevent="togglePinExpanded(p)"
+                    >
+                        {{ pinExpanded(p) ? "Show less" : "Show more" }}
+                    </button>
+                    <div
+                        v-if="p.value.querySnapshot && p.value.querySnapshot !== '(from chat)'"
+                        class="saved-pin-meta"
+                    >
+                        Found via search: <em>{{ p.value.querySnapshot }}</em>
+                    </div>
+                    <div v-if="!pinIsLinkable(p)" class="saved-pin-meta saved-pin-meta-stale">
+                        (Older pin — open chat manually.)
+                    </div>
+                </div>
+            </component>
+            <div class="message-menu" :ref="(el) => setMenuRef(p.url, el)">
+                <button
+                    type="button"
+                    class="kebab-btn"
+                    title="More actions"
+                    aria-label="More actions"
+                    :aria-expanded="openMenuUrl === p.url ? 'true' : 'false'"
+                    @click.stop="toggleMenu(p.url)"
+                >
+                    ⋯
+                </button>
+                <div v-if="openMenuUrl === p.url" class="message-menu-pop" role="menu">
+                    <button
+                        type="button"
+                        class="message-menu-item message-menu-danger"
+                        role="menuitem"
+                        :disabled="isDeletingSaved.has(p.url)"
+                        @click="removeFromMenu(p)"
+                    >
+                        {{ isDeletingSaved.has(p.url) ? "Removing…" : "Remove" }}
+                    </button>
                 </div>
             </div>
-            <button
-                type="button"
-                class="saved-drop"
-                title="Remove pinned message"
-                :disabled="isDeletingSaved.has(p.url)"
-                @click="deleteSavedPin(p)"
-            >
-                {{ isDeletingSaved.has(p.url) ? "…" : "Remove" }}
-            </button>
         </li>
     </ul>
 </div>

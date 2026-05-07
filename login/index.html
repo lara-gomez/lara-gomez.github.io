@@ -10,6 +10,16 @@
         >
             Log in
         </button>
-        <p v-else class="login-status">Loading…</p>
+        <p v-else-if="$graffitiSession.value === undefined && !bootStalled" class="login-status">
+            Loading Graffiti session…
+        </p>
+        <div v-else-if="$graffitiSession.value === undefined && bootStalled" class="login-stall">
+            <p class="login-stall-copy">Connecting is taking unusually long.</p>
+            <button type="button" class="signedout-login" @click="$graffiti.login()">Try sign-in</button>
+            <button type="button" class="login-stall-reload" @click="reloadLoginPage">
+                Reload page
+            </button>
+        </div>
+        <p v-else class="login-status">Opening app…</p>
     </div>
 </div>

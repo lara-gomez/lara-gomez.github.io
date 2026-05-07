@@ -1,5 +1,13 @@
-import { ref, computed, watch, onMounted, onUnmounted } from "vue";
+import {
+  ref,
+  computed,
+  watch,
+  onMounted,
+  onUnmounted,
+  nextTick,
+} from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { contentSearchHaystack } from "./linkify.js";
 import {
   useGraffiti,
   useGraffitiSession,
@@ -11,6 +19,12 @@ const DIRECTORY = "hw10-messages-v3-participants";
 
 const NO_CHAT = "hw10-no-chat-selected";
 
+/**
+ * Max length for shared chat titles and private labels (~1–2 short lines in the UI).
+ * Matches JSON schema `maxLength` on directory `title` fields.
+ */
+const CHAT_LABEL_MAX_LENGTH = 100;
+
 const schemaDirectoryCreate = {
   properties: {
     value: {
@@ -21,7 +35,7 @@ const schemaDirectoryCreate = {
         activity: { const: "Create" },
         type: { const: "Chat" },
         participants: { type: "array", items: { type: "string" } },
-        title: { type: "string" },
+        title: { type: "string", maxLength: CHAT_LABEL_MAX_LENGTH },
       },
     },
   },
@@ -37,6 +51,7 @@ const schemaDirectoryUpdate = {
         activity: { const: "Update" },
         type: { const: "Chat" },
         participants: { type: "array", items: { type: "string" } },
+        title: { type: "string", maxLength: CHAT_LABEL_MAX_LENGTH },
       },
     },
   },
@@ -100,6 +115,8 @@ const schemaSaveSearchResult = {
         querySnapshot: { type: "string" },
         snippet: { type: "string" },
         messageUrl: { type: "string" },
+        /** Optional source thread channel — enables click-through from the Pinned page. */
+        threadChannel: { type: "string" },
       },
     },
   },
@@ -127,6 +144,45 @@ function dayStartMs(isoDate) {
 function dayEndMs(isoDate) {
   if (!isoDate) return null;
   return new Date(`${isoDate}T23:59:59.999`).getTime();
+}
+
+export function formatHandle(handleOrActor) {
+  if (!handleOrActor) return "";
+  const s = String(handleOrActor).trim();
+  if (!s) return "";
+  if (s.startsWith("at://")) {
+    const m = s.match(/^at:\/\/([^/]+)/i);
+    return m?.[1] || s;
+  }
+  if (s.startsWith("did:")) {
+    const tail = s.split(":").pop() || s;
+    return tail.length > 20 ? `${tail.slice(0, 12)}…${tail.slice(-6)}` : tail;
+  }
+  const m = s.match(/^([a-z0-9._-]+)\.graffiti\.actor$/i);
+  if (m) return m[1];
+  return s;
+}
+
+/** Resolved labels from `UserName` / prefetch — keeps `<select>` labels in sync with the chat list. */
+const actorDisplayCache = new Map();
+export const actorDisplayVersion = ref(0);
+
+export function syncActorDisplayCache(actor, display) {
+  if (!actor || typeof display !== "string") return;
+  const t = display.trim();
+  if (!t) return;
+  if (actorDisplayCache.get(actor) === t) return;
+  actorDisplayCache.set(actor, t);
+  actorDisplayVersion.value++;
+}
+
+export function clearActorDisplayCache() {
+  actorDisplayCache.clear();
+  actorDisplayVersion.value++;
+}
+
+function peekActorDisplayCache(actor) {
+  return actor ? actorDisplayCache.get(actor) ?? null : null;
 }
 
 function messageActor(obj) {
@@ -240,6 +296,13 @@ function alertGraffitiPostFailed(kind, err) {
 export function useMessagesState() {
   const graffiti = useGraffiti();
   const session = useGraffitiSession();
+
+  watch(
+    () => session.value?.actor,
+    (actor, prev) => {
+      if (actor !== prev) clearActorDisplayCache();
+    },
+  );
   const route = useRoute();
   const router = useRouter();
 
@@ -263,12 +326,24 @@ export function useMessagesState() {
   const isManageAdding = ref(false);
 
   const searchQuery = ref("");
-  const advancedOpen = ref(false);
   const mediaFilter = ref("any");
   const peopleFilter = ref("any");
   const dateFrom = ref("");
   const dateTo = ref("");
   const searchResults = ref([]);
+
+  /** Lightweight global toast: { text, key } shown by the layout shell. */
+  const toast = ref(null);
+  let toastTimer;
+  function showToast(text, ms = 2400) {
+    if (!text) return;
+    toast.value = { text, key: (toast.value?.key ?? 0) + 1 };
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toast.value = null;
+      toastTimer = undefined;
+    }, ms);
+  }
 
   function handleImageSelect(event) {
     const file = event.target.files?.[0];
@@ -302,7 +377,7 @@ export function useMessagesState() {
     if (prev !== ch) clearPendingImage();
   });
 
-  /** `?thread=` on Search / results — null means all conversations. */
+  /** `?thread=` on Chats (home) / results — null means all conversations. */
   function normalizeThreadQuery(t) {
     if (typeof t !== "string") return null;
     const s = t.trim();
@@ -311,18 +386,29 @@ export function useMessagesState() {
 
   const searchThreadScopeSelect = computed({
     get() {
-      return normalizeThreadQuery(route.query.thread) ?? "";
+      const t = normalizeThreadQuery(route.query.thread);
+      return t ? chatChannelMapKey(t) : "";
     },
     set(v) {
-      const tid = v && String(v).trim() ? String(v).trim() : null;
+      const raw = v && String(v).trim() ? String(v).trim() : null;
+      const tid = raw ? chatChannelMapKey(raw) : null;
       const q = { ...route.query };
       if (tid) q.thread = tid;
       else delete q.thread;
-      if (route.name === "search" || route.name === "search-results") {
-        router.replace({ name: route.name, query: q });
+      if (route.name === "search-results") {
+        router.replace({ name: "search-results", query: q });
+      } else {
+        router.replace({ name: "home", query: q });
       }
     },
   });
+
+  /** `<select>` model: canonical key so it always matches an `<option value>`. */
+  const searchScopeSelectValue = computed(() => searchThreadScopeSelect.value);
+
+  function chatScopeOptionValue(chat) {
+    return chatChannelMapKey(chat?.value?.channel);
+  }
 
   /** Set search scope (channel id or empty for all); used by scope picker UI. */
   function pickSearchScope(channelId) {
@@ -331,7 +417,7 @@ export function useMessagesState() {
 
   const searchRunButtonLabel = computed(() =>
     normalizeThreadQuery(route.query.thread)
-      ? "Search in this conversation"
+      ? "Search this chat only"
       : "Search all my chats",
   );
 
@@ -359,15 +445,21 @@ export function useMessagesState() {
     false,
   );
 
+  /** Stable Map key for thread channel ids (Create / Update / Leave must agree). */
+  function chatChannelMapKey(cid) {
+    if (cid === undefined || cid === null || cid === "") return "";
+    return String(cid);
+  }
+
   /** channel -> latest valid Update obj (creator-only enforced via effectiveParticipants). */
   const chatUpdatesByChannel = computed(() => {
     const map = new Map();
     for (const u of chatUpdatesRaw.value) {
-      const ch = u.value?.channel;
-      if (!ch) continue;
-      const cur = map.get(ch);
+      const key = chatChannelMapKey(u.value?.channel);
+      if (!key) continue;
+      const cur = map.get(key);
       if (!cur || (u.value.published || 0) > (cur.value.published || 0)) {
-        map.set(ch, u);
+        map.set(key, u);
       }
     }
     return map;
@@ -377,19 +469,55 @@ export function useMessagesState() {
   const leavesByChannel = computed(() => {
     const map = new Map();
     for (const l of chatLeavesRaw.value) {
-      const ch = l.value?.channel;
+      const key = chatChannelMapKey(l.value?.channel);
       const a = l.actor;
-      if (!ch || !a) continue;
-      if (!map.has(ch)) map.set(ch, new Set());
-      map.get(ch).add(a);
+      if (!key || !a) continue;
+      if (!map.has(key)) map.set(key, new Set());
+      map.get(key).add(a);
     }
     return map;
   });
 
+  /**
+   * channel key -> shared title from the latest creator Update that included a
+   * `title` field. Empty string clears a prior name. Updates without `title`
+   * leave the name unchanged. Create `title` is ignored.
+   */
+  const customTitleByChannel = computed(() => {
+    const creatorByKey = new Map();
+    for (const c of chatsRaw.value) {
+      const key = chatChannelMapKey(c.value?.channel);
+      if (!key) continue;
+      creatorByKey.set(key, c.actor);
+    }
+    const latest = new Map();
+    for (const u of chatUpdatesRaw.value) {
+      const key = chatChannelMapKey(u.value?.channel);
+      if (!key) continue;
+      const creator = creatorByKey.get(key);
+      if (!creator || u.actor !== creator) continue;
+      const v = u.value;
+      if (!v || !Object.prototype.hasOwnProperty.call(v, "title")) continue;
+      const raw = v.title;
+      const str = typeof raw === "string" ? raw.trim() : "";
+      const pub = v.published ?? 0;
+      const prev = latest.get(key);
+      if (!prev || pub >= prev.pub) {
+        latest.set(key, { str, pub });
+      }
+    }
+    const out = new Map();
+    for (const [k, row] of latest) {
+      if (row.str) out.set(k, row.str);
+    }
+    return out;
+  });
+
   function effectiveParticipants(chat) {
     if (!chat?.value?.channel) return [];
-    const ch = chat.value.channel;
-    const update = chatUpdatesByChannel.value.get(ch);
+    const key = chatChannelMapKey(chat.value.channel);
+    if (!key) return [];
+    const update = chatUpdatesByChannel.value.get(key);
     const fromUpdate =
       update &&
       update.actor === chat.actor &&
@@ -398,7 +526,7 @@ export function useMessagesState() {
         : null;
     const base =
       fromUpdate || (Array.isArray(chat.value.participants) ? chat.value.participants : []);
-    const left = leavesByChannel.value.get(ch);
+    const left = leavesByChannel.value.get(key);
     if (!left || !left.size) return base;
     return base.filter((a) => !left.has(a));
   }
@@ -406,6 +534,21 @@ export function useMessagesState() {
   const myChats = computed(() =>
     filterChatsForActor(chatsRaw.value, session.value?.actor, effectiveParticipants),
   );
+
+  /**
+   * All Create-Chat rows where I'm currently an effective participant
+   * (including chats created by other members).
+   */
+  const chatsBySetForCurrentUser = computed(() => {
+    const me = session.value?.actor;
+    if (!me) return [];
+    const out = [];
+    for (const c of chatsRaw.value) {
+      const eff = effectiveParticipants(c);
+      if (eff.includes(me)) out.push(c);
+    }
+    return out;
+  });
 
   function applyChatSelection(ch) {
     channel.value = ch;
@@ -418,6 +561,15 @@ export function useMessagesState() {
   function syncRouteToState() {
     const n = route.name;
     if (n === "home") {
+      channel.value = null;
+      composeOpen.value = false;
+      if (route.query?.from === "thread-search" && normalizeThreadQuery(route.query.thread)) {
+        showToast("Searching in this chat");
+        const q = { ...route.query };
+        delete q.from;
+        router.replace({ name: "home", query: q, hash: route.hash || "#search-tools" });
+      }
+    } else if (n === "search-results") {
       channel.value = null;
       composeOpen.value = false;
     } else if (n === "compose") {
@@ -469,37 +621,326 @@ export function useMessagesState() {
     );
   }
 
-  /** Plain-text line for `<option>` labels; same tokens as roster order, joined for reading. */
-  function chatScopeOptionLabel(chat) {
+  /**
+   * Peers to show in search/chat scope labels when `rosterActors` is empty but the
+   * Create row still lists participants (e.g. before updates / edge cases).
+   */
+  function chatScopeFallbackActors(chat) {
     const others = rosterActors(chat);
-    if (!others.length) return "Conversation";
-    return others
-      .map((a) => {
-        const s = String(a);
-        const at = s.match(/at:\/\/([^/]+)/);
-        if (at) return at[1];
-        const g = s.match(/([a-z0-9_.-]+)\.graffiti\.actor/i);
-        if (g) return g[1];
-        return s.length > 28 ? `${s.slice(0, 26)}…` : s;
-      })
-      .join(" · ");
+    if (others.length) return others;
+    const me = session.value?.actor;
+    const raw = Array.isArray(chat?.value?.participants) ? chat.value.participants : [];
+    const uniq = [...new Set(raw.filter(Boolean))];
+    return uniq
+      .filter((a) => a && a !== me)
+      .toSorted((a, b) => String(a).localeCompare(String(b)));
   }
 
-  /** Chats ordered by readable title (not Graffiti / channel id order). */
+  /** Plain-text chip for actor ids (must match UserName-ish readability: DIDs, at://, handles). */
+  function shortActorDisplay(a) {
+    if (!a) return "?";
+    const cached = peekActorDisplayCache(a);
+    if (cached) return cached;
+    const s = String(a).trim();
+    if (!s) return "?";
+    const h = formatHandle(s);
+    const out = h || `…${s.slice(-6)}`;
+    return out.length > 26 ? `…${s.slice(-6)}` : out;
+  }
+
+  /** Plain-text line for `<option>` labels; prefers shared/private title, else roster. */
+  function chatScopeOptionLabel(chat) {
+    void actorDisplayVersion.value;
+    const named = chatResolvedLabel(chat);
+    if (named) return named;
+    const others = chatScopeFallbackActors(chat);
+    if (!others.length) return "Conversation";
+    return others.map((a) => shortActorDisplay(a)).join(" · ");
+  }
+
+  /** Shared name from the chat creator’s Updates (visible to everyone). */
+  function chatCustomTitle(chat) {
+    const key = chatChannelMapKey(chat?.value?.channel);
+    return key ? customTitleByChannel.value.get(key) || "" : "";
+  }
+
+  const CHAT_LABEL_PREFIX = "hw10-chat-label-";
+  function chatLabelStorageKey(actor) {
+    return actor ? CHAT_LABEL_PREFIX + base64UrlFromUtf8(actor) : "";
+  }
+
+  const personalChatLabelsByChannel = ref({});
+
+  function loadPersonalChatLabels(actor) {
+    const k = chatLabelStorageKey(actor);
+    if (!k) {
+      personalChatLabelsByChannel.value = {};
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(k);
+      const parsed = raw ? JSON.parse(raw) : {};
+      personalChatLabelsByChannel.value =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed
+          : {};
+    } catch {
+      personalChatLabelsByChannel.value = {};
+    }
+  }
+
+  function persistPersonalChatLabels() {
+    const k = chatLabelStorageKey(session.value?.actor);
+    if (!k) return;
+    try {
+      localStorage.setItem(k, JSON.stringify(personalChatLabelsByChannel.value));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  watch(
+    () => session.value?.actor,
+    (a) => loadPersonalChatLabels(a),
+    { immediate: true },
+  );
+
+  /** Label only this user sees (device-local). */
+  function personalChatLabel(chat) {
+    const key = chatChannelMapKey(chat?.value?.channel);
+    if (!key) return "";
+    const t = personalChatLabelsByChannel.value[key];
+    return typeof t === "string" ? t.trim() : "";
+  }
+
+  function setPersonalChatLabel(chat, title) {
+    const key = chatChannelMapKey(chat?.value?.channel);
+    if (!key || !session.value?.actor) return;
+    const t = String(title).trim().slice(0, CHAT_LABEL_MAX_LENGTH);
+    if (!t) return;
+    personalChatLabelsByChannel.value = {
+      ...personalChatLabelsByChannel.value,
+      [key]: t,
+    };
+    persistPersonalChatLabels();
+  }
+
+  function clearPersonalChatLabel(chat) {
+    const key = chatChannelMapKey(chat?.value?.channel);
+    if (!key || !session.value?.actor) return;
+    const next = { ...personalChatLabelsByChannel.value };
+    delete next[key];
+    personalChatLabelsByChannel.value = next;
+    persistPersonalChatLabels();
+  }
+
+  /** Shared title if set, otherwise this user’s private label. */
+  function chatResolvedLabel(chat) {
+    return chatCustomTitle(chat) || personalChatLabel(chat);
+  }
+
+  /** Whether this user can clear something (shared name as creator, or private label). */
+  function chatCanRemoveLabel(chat) {
+    if (!session.value?.actor || !chat) return false;
+    if (personalChatLabel(chat)) return true;
+    if (chat.actor === session.value.actor && chatCustomTitle(chat)) return true;
+    return false;
+  }
+
+  /** Per-user read cursors (latest `published` treated as read per thread), local only. */
+  const READ_CURSOR_PREFIX = "hw10-read-";
+  function readCursorStorageKey(actor) {
+    return actor ? READ_CURSOR_PREFIX + base64UrlFromUtf8(actor) : "";
+  }
+
+  const readCursorByChannel = ref({});
+
+  function loadReadCursors(actor) {
+    const k = readCursorStorageKey(actor);
+    if (!k) {
+      readCursorByChannel.value = {};
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(k);
+      const parsed = raw ? JSON.parse(raw) : {};
+      readCursorByChannel.value =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? parsed
+          : {};
+    } catch {
+      readCursorByChannel.value = {};
+    }
+  }
+
+  function persistReadCursors() {
+    const k = readCursorStorageKey(session.value?.actor);
+    if (!k) return;
+    try {
+      localStorage.setItem(k, JSON.stringify(readCursorByChannel.value));
+    } catch {
+      /* ignore quota / privacy mode */
+    }
+  }
+
+  watch(
+    () => session.value?.actor,
+    (a) => loadReadCursors(a),
+    { immediate: true },
+  );
+
+  const lastMessageByChannel = computed(() => {
+    const map = new Map();
+    for (const m of allMessageObjects.value) {
+      const tid = messageThreadId(m);
+      if (tid === undefined || tid === null || tid === "") continue;
+      const key = chatChannelMapKey(tid);
+      const pub = m.value?.published ?? 0;
+      const cur = map.get(key);
+      const curPub = cur?.value?.published ?? -1;
+      if (
+        !cur ||
+        pub > curPub ||
+        (pub === curPub && String(m.url || "") > String(cur.url || ""))
+      ) {
+        map.set(key, m);
+      }
+    }
+    return map;
+  });
+
+  function messageSnippetForList(m) {
+    if (!m?.value) return "";
+    const v = m.value;
+    if (v.attachmentUrl) {
+      const c = String(v.content || "").trim();
+      if (c && c !== " ") return c.length > 100 ? `${c.slice(0, 98)}…` : c;
+      return "Photo";
+    }
+    const c = String(v.content || "").trim();
+    if (!c) return "";
+    return c.length > 100 ? `${c.slice(0, 98)}…` : c;
+  }
+
+  function chatLastPreview(chat) {
+    const key = chatChannelMapKey(chat?.value?.channel);
+    if (!key) return "";
+    const m = lastMessageByChannel.value.get(key);
+    return m ? messageSnippetForList(m) : "";
+  }
+
+  function chatIsUnread(chat) {
+    const sk = chatChannelMapKey(chat?.value?.channel);
+    if (!sk) return false;
+    const last = lastMessageByChannel.value.get(sk);
+    if (!last) return false;
+    const maxPub = last.value?.published ?? 0;
+    if (maxPub <= 0) return false;
+    const read = readCursorByChannel.value[sk] ?? 0;
+    return maxPub > read;
+  }
+
+  function markChannelRead(cid, floorPublished) {
+    if (!cid || !session.value?.actor) return;
+    const sk = chatChannelMapKey(cid);
+    let maxPub = 0;
+    for (const m of allMessageObjects.value) {
+      if (chatChannelMapKey(messageThreadId(m)) !== sk) continue;
+      maxPub = Math.max(maxPub, m.value?.published ?? 0);
+    }
+    if (floorPublished != null && Number.isFinite(floorPublished)) {
+      maxPub = Math.max(maxPub, floorPublished);
+    }
+    readCursorByChannel.value = { ...readCursorByChannel.value, [sk]: maxPub };
+    persistReadCursors();
+  }
+
+  watch(
+    [() => route.name, () => route.params.chatId, lastMessageByChannel],
+    () => {
+      if (route.name !== "chat" || !route.params.chatId) return;
+      nextTick(() => markChannelRead(String(route.params.chatId)));
+    },
+    { flush: "post", immediate: true },
+  );
+
+  /** Chats ordered by recent message activity; tie-break roster label then channel id. */
   const chatsSortedForDisplay = computed(() =>
     [...myChats.value].toSorted((a, b) => {
-      const la = chatScopeOptionLabel(a);
-      const lb = chatScopeOptionLabel(b);
-      const cmp = la.localeCompare(lb, undefined, { numeric: true, sensitivity: "base" });
+      const ka = chatChannelMapKey(a.value?.channel);
+      const kb = chatChannelMapKey(b.value?.channel);
+      const pa = lastMessageByChannel.value.get(ka)?.value?.published ?? 0;
+      const pb = lastMessageByChannel.value.get(kb)?.value?.published ?? 0;
+      if (pb !== pa) return pb - pa;
+      const cmp = chatScopeOptionLabel(a).localeCompare(chatScopeOptionLabel(b), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
       if (cmp !== 0) return cmp;
-      return String(a.value?.channel || "").localeCompare(String(b.value?.channel || ""));
+      return ka.localeCompare(kb);
     }),
+  );
+
+  const searchScopeOrphanNeeded = computed(() => {
+    const v = searchScopeSelectValue.value;
+    if (!v) return false;
+    return !chatsSortedForDisplay.value.some((c) => chatScopeOptionValue(c) === v);
+  });
+
+  const searchScopeOrphanLabel = computed(() => {
+    if (!searchScopeOrphanNeeded.value) return "";
+    const ch = chatForChannel(searchScopeSelectValue.value);
+    if (ch) return chatScopeOptionLabel(ch);
+    const s = searchScopeSelectValue.value;
+    return s.length > 28 ? `Chat · …${s.slice(-12)}` : `Chat · ${s}`;
+  });
+
+  /** Always-visible search scope text for the compact home toolbar. */
+  const searchScopeSummaryLabel = computed(() => {
+    const scope = searchScopeSelectValue.value;
+    if (!scope) return "All chats";
+    const ch = chatForChannel(scope);
+    if (ch) return chatScopeOptionLabel(ch);
+    return searchScopeOrphanLabel.value || "Selected chat";
+  });
+
+  /** Resolve participant handles for search scope labels (same names as chat list / UserName). */
+  watch(
+    () => chatsSortedForDisplay.value,
+    (list) => {
+      const me = session.value?.actor;
+      if (!me || !list?.length) return;
+      const seen = new Set();
+      for (const chat of list) {
+        for (const a of chatScopeFallbackActors(chat)) {
+          if (!a || seen.has(a)) continue;
+          seen.add(a);
+          if (peekActorDisplayCache(a)) continue;
+          void (async () => {
+            try {
+              const handle = await graffiti.actorToHandle(a);
+              const formatted =
+                formatHandle(handle) || formatHandle(a) || `…${String(a).slice(-6)}`;
+              syncActorDisplayCache(a, formatted);
+            } catch {
+              syncActorDisplayCache(
+                a,
+                formatHandle(a) || `…${String(a).slice(-6)}`,
+              );
+            }
+          })();
+        }
+      }
+    },
+    { flush: "post" },
   );
 
   const selectedRosterActors = computed(() => {
     const ch = channel.value;
     if (!ch) return [];
-    const ob = myChats.value.find((c) => c.value.channel === ch);
+    const ob = myChats.value.find(
+      (c) => chatChannelMapKey(c.value.channel) === chatChannelMapKey(ch),
+    );
     return ob ? rosterActors(ob) : [];
   });
 
@@ -544,11 +985,10 @@ export function useMessagesState() {
   );
 
   function pollThreadsAndMessages() {
-    if (!session.value?.actor) return;
     void pollChats();
     void pollChatUpdates();
     void pollChatLeaves();
-    void pollAllMessages();
+    if (session.value?.actor) void pollAllMessages();
   }
 
   function pollPersonalObjects() {
@@ -575,12 +1015,13 @@ export function useMessagesState() {
         pollPersonalObjects();
       }
     },
+    { immediate: true },
   );
 
   watch(
     () => route.name,
     (n) => {
-      if (n === "saved" || n === "search") pollPersonalObjects();
+      if (n === "saved" || n === "home" || n === "search-results") pollPersonalObjects();
     },
   );
 
@@ -628,7 +1069,7 @@ export function useMessagesState() {
   });
 
   function goSearch() {
-    router.push({ name: "search" });
+    router.push({ name: "home", hash: "#search-tools" });
   }
 
   function goBack() {
@@ -685,10 +1126,10 @@ export function useMessagesState() {
       return;
     }
     const me = session.value.actor;
-    const fullParticipants = [me, ...pendingRecipients.value];
+    const fullParticipants = [...new Set([me, ...pendingRecipients.value])];
 
-    const existing = myChats.value.find((c) => {
-      const p = Array.isArray(c.value?.participants) ? c.value.participants : [];
+    const existing = chatsBySetForCurrentUser.value.find((c) => {
+      const p = effectiveParticipants(c);
       return sameParticipantSet(p, fullParticipants);
     });
     if (existing) {
@@ -746,21 +1187,99 @@ export function useMessagesState() {
     return Boolean(c && session.value?.actor && c.actor !== session.value.actor);
   });
 
-  async function postUpdateChat(chatObj, participants) {
+  async function postUpdateChat(chatObj, participants, opts = {}) {
+    const val = {
+      activity: "Update",
+      type: "Chat",
+      channel: chatObj.value.channel,
+      participants,
+      published: Date.now(),
+    };
+    if (opts?.clearTitle) {
+      val.title = "";
+    } else if (opts?.title != null) {
+      const t = String(opts.title).trim().slice(0, CHAT_LABEL_MAX_LENGTH);
+      if (t) val.title = t;
+    }
     await graffiti.post(
       {
-        value: {
-          activity: "Update",
-          type: "Chat",
-          channel: chatObj.value.channel,
-          participants,
-          published: Date.now(),
-        },
+        value: val,
         channels: [DIRECTORY],
       },
       session.value,
     );
     void pollChatUpdates();
+  }
+
+  async function renameChat(chatObj) {
+    if (!chatObj || !session.value?.actor) return;
+    const isCreator = chatObj.actor === session.value.actor;
+    const suggested =
+      chatCustomTitle(chatObj) || personalChatLabel(chatObj) || "";
+    const msg = isCreator
+      ? `Conversation name (everyone in this chat sees it, max ${CHAT_LABEL_MAX_LENGTH} characters)`
+      : `Your label for this chat (only you see it, max ${CHAT_LABEL_MAX_LENGTH} characters)`;
+    const name = window.prompt(msg, suggested);
+    if (name === null) return;
+    const t = String(name).trim();
+    if (!t) {
+      window.alert("Name can’t be empty. Use “Remove label” to clear.");
+      return;
+    }
+    if (t.length > CHAT_LABEL_MAX_LENGTH) {
+      window.alert(
+        `That name is too long. Use at most ${CHAT_LABEL_MAX_LENGTH} characters (about one short line).`,
+      );
+      return;
+    }
+    const eff = effectiveParticipants(chatObj);
+    try {
+      if (isCreator) {
+        await postUpdateChat(chatObj, eff, { title: t });
+        if (personalChatLabel(chatObj)) clearPersonalChatLabel(chatObj);
+      } else {
+        setPersonalChatLabel(chatObj, t);
+      }
+    } catch (err) {
+      alertGraffitiPostFailed("Rename chat", err);
+    }
+  }
+
+  async function removeChatLabel(chatObj) {
+    if (!chatObj || !session.value?.actor) return;
+    const me = session.value.actor;
+    const isCreator = chatObj.actor === me;
+    const shared = chatCustomTitle(chatObj);
+    const personal = personalChatLabel(chatObj);
+    if (!shared && !personal) return;
+
+    let detail;
+    if (isCreator && shared && personal) {
+      detail =
+        "This removes the shared name for everyone and your private label on this device.";
+    } else if (isCreator && shared) {
+      detail = "This removes the shared name for everyone in the chat.";
+    } else if (personal && shared && !isCreator) {
+      detail =
+        "This removes only your private label. The name everyone sees will stay.";
+    } else {
+      detail = "This removes your private label for this chat.";
+    }
+    if (!window.confirm(`Remove conversation label?\n\n${detail}`)) return;
+
+    if (isCreator && shared) {
+      try {
+        await postUpdateChat(
+          chatObj,
+          effectiveParticipants(chatObj),
+          { clearTitle: true },
+        );
+      } catch (err) {
+        alertGraffitiPostFailed("Remove label", err);
+        return;
+      }
+    }
+    if (personal) clearPersonalChatLabel(chatObj);
   }
 
   async function addParticipant(chatObj) {
@@ -861,15 +1380,14 @@ export function useMessagesState() {
         }
       }
       try {
-        await graffiti.post(
-          buildSendMessagePost(
-            channel.value,
-            text || (attachmentUrl ? " " : ""),
-            session.value.actor,
-            attachmentUrl,
-          ),
-          session.value,
+        const postBody = buildSendMessagePost(
+          channel.value,
+          text || (attachmentUrl ? " " : ""),
+          session.value.actor,
+          attachmentUrl,
         );
+        await graffiti.post(postBody, session.value);
+        markChannelRead(channel.value, postBody.value.published);
         myMessage.value = "";
         clearPendingImage();
       } catch (err) {
@@ -943,10 +1461,14 @@ export function useMessagesState() {
 
   function chatForChannel(cid) {
     if (!cid) return null;
-    return myChats.value.find((c) => c.value.channel === cid) ?? null;
+    const ck = chatChannelMapKey(cid);
+    return (
+      myChats.value.find((c) => chatChannelMapKey(c.value.channel) === ck) ??
+      null
+    );
   }
 
-  /** Chat row for current `?thread=` (search / search-results); null if all-chats or unknown id. */
+  /** Chat row for current `?thread=` (home / search-results); null if all-chats or unknown id. */
   const searchScopedChat = computed(() => {
     const tid = normalizeThreadQuery(route.query.thread);
     if (!tid) return null;
@@ -956,20 +1478,27 @@ export function useMessagesState() {
   function runSearch() {
     void recordRecentSearch(searchQuery.value);
     pollThreadsAndMessages();
-    const scope = normalizeThreadQuery(route.query.thread);
-    const pool = scope
-      ? allMessageObjects.value.filter((obj) => messageThreadId(obj) === scope)
+    const scopeRaw = normalizeThreadQuery(route.query.thread);
+    const scopeKey = scopeRaw ? chatChannelMapKey(scopeRaw) : null;
+    const pool = scopeKey
+      ? allMessageObjects.value.filter(
+          (obj) => chatChannelMapKey(messageThreadId(obj)) === scopeKey,
+        )
       : allMessageObjects.value;
     const q = searchQuery.value.trim().toLowerCase();
     const words = q.split(/\s+/).filter(Boolean);
-    const adv = advancedOpen.value;
+    const adv =
+      mediaFilter.value !== "any" ||
+      peopleFilter.value !== "any" ||
+      Boolean(String(dateFrom.value || "").trim()) ||
+      Boolean(String(dateTo.value || "").trim());
     const fromMs = adv ? dayStartMs(dateFrom.value) : null;
     const toMs = adv ? dayEndMs(dateTo.value) : null;
 
     searchResults.value = pool.filter((obj) => {
       const content = obj.value.content || "";
-      const c = content.toLowerCase();
-      const okWords = !words.length || words.every((w) => c.includes(w));
+      const haystack = contentSearchHaystack(content);
+      const okWords = !words.length || words.every((w) => haystack.includes(w));
       if (!okWords) return false;
 
       if (!adv) return true;
@@ -984,7 +1513,11 @@ export function useMessagesState() {
       let okMedia = true;
       if (mediaFilter.value === "text")
         okMedia = (obj.value.mediaType || "text") === "text";
-      else if (mediaFilter.value === "links") okMedia = /https?:\/\//i.test(content);
+      else if (mediaFilter.value === "links")
+        okMedia =
+          /https?:\/\//i.test(content) ||
+          /\bwww\.[^\s<>"']+/i.test(content) ||
+          /\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s<>"']*)?/i.test(content);
       else if (mediaFilter.value === "images")
         okMedia =
           (obj.value.mediaType || "") === "image" ||
@@ -998,7 +1531,7 @@ export function useMessagesState() {
     });
     router.push({
       name: "search-results",
-      query: scope ? { thread: scope } : {},
+      query: scopeKey ? { thread: scopeKey } : {},
     });
   }
 
@@ -1009,27 +1542,33 @@ export function useMessagesState() {
 
   function applyRecent(q) {
     searchQuery.value = q;
-    router.push({ name: "search", query: searchRouteThreadQuery() });
+    router.push({ name: "home", query: searchRouteThreadQuery(), hash: "#search-tools" });
   }
 
   async function pinResult(obj) {
     const label = window.prompt("Name for this saved result?", "Important message");
     if (!label) return;
-    await graffiti.post(
-      {
-        value: {
-          activity: "SaveSearchResult",
-          name: label.trim(),
-          querySnapshot: searchQuery.value.trim() || "(browse)",
-          snippet: (obj.value.content || "").slice(0, 2000),
-          messageUrl: obj.url,
-          published: Date.now(),
+    try {
+      await graffiti.post(
+        {
+          value: {
+            activity: "SaveSearchResult",
+            name: label.trim(),
+            querySnapshot: searchQuery.value.trim() || "(browse)",
+            snippet: (obj.value.content || "").slice(0, 2000),
+            messageUrl: obj.url,
+            threadChannel: messageThreadId(obj) || channel.value || "",
+            published: Date.now(),
+          },
+          channels: [personalCh.value],
         },
-        channels: [personalCh.value],
-      },
-      session.value,
-    );
-    pollPersonalObjects();
+        session.value,
+      );
+      pollPersonalObjects();
+      showToast("Pinned to your Pinned tab");
+    } catch (err) {
+      alertGraffitiPostFailed("Pin message", err);
+    }
   }
 
   const isDeletingSaved = ref(new Set());
@@ -1049,6 +1588,7 @@ export function useMessagesState() {
             querySnapshot: "(from chat)",
             snippet: (obj.value.content || "").slice(0, 2000),
             messageUrl: obj.url,
+            threadChannel: messageThreadId(obj) || channel.value || "",
             published: Date.now(),
           },
           channels: [personalCh.value],
@@ -1056,8 +1596,38 @@ export function useMessagesState() {
         session.value,
       );
       pollPersonalObjects();
+      showToast("Pinned to your Pinned tab");
     } catch (err) {
       alertGraffitiPostFailed("Pin message", err);
+    }
+  }
+
+  /** Set of message URLs the current user has pinned (drives the Pinned chip). */
+  const pinnedMessageUrls = computed(
+    () =>
+      new Set(
+        savedResultObjects.value
+          .map((o) => o.value?.messageUrl)
+          .filter((u) => typeof u === "string" && u),
+      ),
+  );
+
+  /** Unpin every SaveSearchResult I own that points at this message URL. */
+  async function unpinMessageByUrl(messageUrl) {
+    if (!messageUrl) return;
+    const me = session.value?.actor;
+    if (!me) return;
+    const mine = savedResultObjects.value.filter(
+      (o) => o.actor === me && o.value?.messageUrl === messageUrl,
+    );
+    if (!mine.length) return;
+    try {
+      await Promise.all(mine.map((o) => graffiti.delete(o, session.value)));
+      showToast("Unpinned");
+    } catch (err) {
+      window.alert(`Could not unpin: ${err?.message || String(err)}`);
+    } finally {
+      pollPersonalObjects();
     }
   }
 
@@ -1067,6 +1637,7 @@ export function useMessagesState() {
     isDeletingSaved.value.add(obj.url);
     try {
       await graffiti.delete(obj, session.value);
+      showToast("Removed from Pinned");
     } catch (err) {
       window.alert(`Could not remove: ${err?.message || String(err)}`);
     } finally {
@@ -1103,11 +1674,15 @@ export function useMessagesState() {
     chats: chatsSortedForDisplay,
     selectChat,
     searchQuery,
-    advancedOpen,
     mediaFilter,
     peopleFilter,
     peopleFilterOptions,
     searchThreadScopeSelect,
+    searchScopeSelectValue,
+    chatScopeOptionValue,
+    searchScopeOrphanNeeded,
+    searchScopeOrphanLabel,
+    searchScopeSummaryLabel,
     pickSearchScope,
     searchRunButtonLabel,
     messageThreadId,
@@ -1122,9 +1697,13 @@ export function useMessagesState() {
     applyRecent,
     pinResult,
     pinMessage,
+    pinnedMessageUrls,
+    unpinMessageByUrl,
     savedPins,
     isDeletingSaved,
     deleteSavedPin,
+    toast,
+    showToast,
     rosterActors,
     selectedRosterActors,
     goSearch,
@@ -1137,5 +1716,13 @@ export function useMessagesState() {
     addParticipant,
     removeParticipant,
     leaveChat,
+    chatCustomTitle,
+    chatResolvedLabel,
+    chatScopeOptionLabel,
+    chatCanRemoveLabel,
+    chatLastPreview,
+    chatIsUnread,
+    renameChat,
+    removeChatLabel,
   };
 }
