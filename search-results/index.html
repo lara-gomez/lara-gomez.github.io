@@ -23,7 +23,7 @@
                 <router-link
                     v-if="g.threadId"
                     class="result-open"
-                    :to="{ name: 'chat', params: { chatId: g.threadId } }"
+                    :to="searchResultGroupOpenTo(g)"
                 >
                     Open chat
                 </router-link>
@@ -33,34 +33,47 @@
             </header>
             <ul class="result-match-list">
                 <li v-for="obj in g.items" :key="obj.url" class="result-match">
-                    <div class="result-match-meta">
-                        <strong>
-                            <UserName :actor="obj.value.sender || obj.actor" />
-                        </strong>
-                        <span v-if="formatPublished(obj.value.published)" class="result-match-time">
-                            {{ formatPublished(obj.value.published) }}
-                        </span>
-                        <span v-if="obj.value.content && obj.value.content.trim()" class="result-match-text">
-                            : <LinkedText :text="previewSnippet(obj)" :highlight-words="queryWords" />
-                        </span>
-                    </div>
-                    <button
-                        v-if="resultCanExpand(obj)"
-                        type="button"
-                        class="result-expand-btn"
-                        @click="toggleResultExpanded(obj)"
+                    <component
+                        :is="g.threadId ? 'router-link' : 'div'"
+                        v-bind="
+                            g.threadId
+                                ? { to: searchResultChatTo(g.threadId, obj) }
+                                : {}
+                        "
+                        class="result-match-link"
+                        :class="{ 'result-match-link-static': !g.threadId }"
                     >
-                        {{ resultExpanded(obj) ? "Show less" : "Show more" }}
-                    </button>
-                    <div v-if="obj.value.attachmentUrl" class="result-thumb">
-                        <graffiti-get-media
-                            :url="obj.value.attachmentUrl"
-                            :accept="{ types: ['image/*'] }"
-                        ></graffiti-get-media>
-                    </div>
-                    <div class="pin-row">
-                        <button type="button" class="pin-btn" @click="pinResult(obj)">📌 Pin message</button>
-                    </div>
+                        <div class="result-match-meta">
+                            <strong>
+                                <UserName :actor="obj.value.sender || obj.actor" />
+                            </strong>
+                            <span v-if="formatPublished(obj.value.published)" class="result-match-time">
+                                {{ formatPublished(obj.value.published) }}
+                            </span>
+                            <span v-if="obj.value.content && obj.value.content.trim()" class="result-match-text">
+                                : <LinkedText :text="previewSnippet(obj)" :highlight-words="queryWords" />
+                            </span>
+                        </div>
+                        <button
+                            v-if="resultCanExpand(obj)"
+                            type="button"
+                            class="result-expand-btn"
+                            @click.stop.prevent="toggleResultExpanded(obj)"
+                        >
+                            {{ resultExpanded(obj) ? "Show less" : "Show more" }}
+                        </button>
+                        <div v-if="obj.value.attachmentUrl" class="result-thumb">
+                            <graffiti-get-media
+                                :url="obj.value.attachmentUrl"
+                                :accept="{ types: ['image/*'] }"
+                            ></graffiti-get-media>
+                        </div>
+                        <div class="pin-row">
+                            <button type="button" class="pin-btn" @click.stop.prevent="pinResult(obj)">
+                                📌 Pin message
+                            </button>
+                        </div>
+                    </component>
                 </li>
             </ul>
         </li>

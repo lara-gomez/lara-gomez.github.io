@@ -1,4 +1,5 @@
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, unref, onMounted, onBeforeUnmount } from "vue";
+import { actorDisplayVersion, actorMatchesContactSearch } from "../state.js";
 
 export default async () => ({
   props: {
@@ -57,6 +58,27 @@ export default async () => ({
       optionsOpen.value = !optionsOpen.value;
     }
 
+    /** Local filter for “From person” chips (not persisted). */
+    const contactFilter = ref("");
+
+    function peopleFilterOptionsList() {
+      const list = unref(props.messages.peopleFilterOptions);
+      return Array.isArray(list) ? list : [];
+    }
+
+    const filteredPeopleFilterOptions = computed(() => {
+      void actorDisplayVersion.value;
+      const arr = peopleFilterOptionsList();
+      const q = contactFilter.value.trim().toLowerCase();
+      if (!q) return arr;
+      return arr.filter((a) => actorMatchesContactSearch(a, q));
+    });
+
+    const contactFilterNoMatch = computed(
+      () =>
+        Boolean(contactFilter.value.trim()) && filteredPeopleFilterOptions.value.length === 0,
+    );
+
     return {
       ...props.messages,
       messages: props.messages,
@@ -70,6 +92,9 @@ export default async () => ({
       deleteChatFromMenu,
       renameChatFromMenu,
       removeChatLabelFromMenu,
+      contactFilter,
+      filteredPeopleFilterOptions,
+      contactFilterNoMatch,
     };
   },
   template: await fetch(new URL("./index.html", import.meta.url)).then((r) => r.text()),

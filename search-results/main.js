@@ -87,6 +87,29 @@ export default async () => ({
     }
 
     const route = useRoute();
+
+    /** Same fragment shape as pinned messages (`messageDomId` in `message/main.js`). */
+    function searchResultMessageHash(obj) {
+      const u = obj?.url;
+      return u ? `#m-${encodeURIComponent(u)}` : "";
+    }
+
+    function searchResultChatTo(threadId, obj) {
+      return {
+        name: "chat",
+        params: { chatId: String(threadId) },
+        hash: searchResultMessageHash(obj),
+      };
+    }
+
+    function searchResultGroupOpenTo(g) {
+      const tid = g?.threadId;
+      const to = { name: "chat", params: { chatId: String(tid) } };
+      const first = g?.items?.[0];
+      if (first?.url) to.hash = searchResultMessageHash(first);
+      return to;
+    }
+
     return {
       ...props.messages,
       messages: props.messages,
@@ -97,6 +120,8 @@ export default async () => ({
       resultCanExpand,
       resultExpanded,
       toggleResultExpanded,
+      searchResultChatTo,
+      searchResultGroupOpenTo,
     };
   },
   template: await fetch(new URL("./index.html", import.meta.url)).then((r) => r.text()),

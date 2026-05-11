@@ -185,8 +185,30 @@ function peekActorDisplayCache(actor) {
   return actor ? actorDisplayCache.get(actor) ?? null : null;
 }
 
+/**
+ * Whether a lowercase contact query matches an actor for chip filtering.
+ * Uses raw id, `formatHandle`, and cached display from `UserName` / prefetch
+ * so typing visible names works, not only DIDs.
+ */
+export function actorMatchesContactSearch(actor, queryLower) {
+  if (!queryLower) return true;
+  if (!actor) return false;
+  const id = String(actor).toLowerCase();
+  if (id.includes(queryLower)) return true;
+  if (formatHandle(actor).toLowerCase().includes(queryLower)) return true;
+  const cached = peekActorDisplayCache(actor);
+  if (cached && String(cached).toLowerCase().includes(queryLower)) return true;
+  return false;
+}
+
 function messageActor(obj) {
   return obj.value.sender || obj.actor;
+}
+
+function messageThreadId(obj) {
+  const chs = obj.channels;
+  if (Array.isArray(chs) && chs.length) return chs[0];
+  return null;
 }
 
 function isExplicitActorId(l) {
@@ -327,7 +349,8 @@ export function useMessagesState() {
 
   const searchQuery = ref("");
   const mediaFilter = ref("any");
-  const peopleFilter = ref("any");
+  /** Actor ids for "From person" search; empty = anyone. OR semantics when multiple. */
+  const peopleFilterActors = ref([]);
   const dateFrom = ref("");
   const dateTo = ref("");
   const searchResults = ref([]);
@@ -421,6 +444,16 @@ export function useMessagesState() {
       : "Search all my chats",
   );
 
+  /** Search is allowed with an empty text box when filters narrow results (media, people, dates). */
+  const searchCanSubmit = computed(() => {
+    if (searchQuery.value.trim()) return true;
+    if (mediaFilter.value !== "any") return true;
+    if (peopleFilterActors.value.length > 0) return true;
+    if (String(dateFrom.value || "").trim()) return true;
+    if (String(dateTo.value || "").trim()) return true;
+    return false;
+  });
+
   const personalCh = computed(() => personalPrefsChannel(session.value?.actor));
 
   /** Public directory — discover without session (assets/graffiti.md). */
@@ -451,12 +484,25 @@ export function useMessagesState() {
     return String(cid);
   }
 
-  /** channel -> latest valid Update obj (creator-only enforced via effectiveParticipants). */
+  /**
+   * channel -> latest Update from the **chat creator** for that channel.
+   * Non-creator updates must not win by `published` alone — otherwise
+   * `effectiveParticipants` ignores them and falls back to Create participants,
+   * which still lists removed people ("already in this chat" after re-add).
+   */
   const chatUpdatesByChannel = computed(() => {
+    const creatorByKey = new Map();
+    for (const c of chatsRaw.value) {
+      const key = chatChannelMapKey(c.value?.channel);
+      if (!key) continue;
+      creatorByKey.set(key, c.actor);
+    }
     const map = new Map();
     for (const u of chatUpdatesRaw.value) {
       const key = chatChannelMapKey(u.value?.channel);
       if (!key) continue;
+      const creator = creatorByKey.get(key);
+      if (!creator || u.actor !== creator) continue;
       const cur = map.get(key);
       if (!cur || (u.value.published || 0) > (cur.value.published || 0)) {
         map.set(key, u);
@@ -518,16 +564,22 @@ export function useMessagesState() {
     const key = chatChannelMapKey(chat.value.channel);
     if (!key) return [];
     const update = chatUpdatesByChannel.value.get(key);
+    /** `chatUpdatesByChannel` is creator-only; do not require `update.actor === chat.actor` — Graffiti may normalize actor strings differently on Create vs Update rows, which would drop valid updates and leave the roster stuck on the original Create list. */
     const fromUpdate =
-      update &&
-      update.actor === chat.actor &&
-      Array.isArray(update.value.participants)
+      update && Array.isArray(update.value.participants)
         ? update.value.participants
         : null;
     const base =
       fromUpdate || (Array.isArray(chat.value.participants) ? chat.value.participants : []);
     const left = leavesByChannel.value.get(key);
     if (!left || !left.size) return base;
+    /**
+     * Self-leaves hide someone when we only have the stale Create participant list.
+     * When the creator’s latest `Update` lists a roster, that list is authoritative:
+     * re-adding someone after they left must not keep stripping them via `LeaveChat`.
+     * Otherwise they vanish from the roster and from `myChats` / message discovery.
+     */
+    if (fromUpdate) return base;
     return base.filter((a) => !left.has(a));
   }
 
@@ -553,7 +605,7 @@ export function useMessagesState() {
   function applyChatSelection(ch) {
     channel.value = ch;
     composeOpen.value = false;
-    peopleFilter.value = "any";
+    peopleFilterActors.value = [];
     dateFrom.value = "";
     dateTo.value = "";
   }
@@ -947,21 +999,55 @@ export function useMessagesState() {
   const peopleFilterOptions = computed(() => {
     const s = new Set();
     for (const chat of myChats.value) {
-      const p = chat.value?.participants;
-      if (Array.isArray(p)) {
-        for (const a of p) {
-          if (a) s.add(a);
-        }
-      } else if (chat.actor) {
-        s.add(chat.actor);
+      for (const a of effectiveParticipants(chat)) {
+        if (a) s.add(a);
       }
     }
-    for (const o of allMessageObjects.value) {
+    const scopeTid = normalizeThreadQuery(route.query.thread);
+    const scopeKey = scopeTid ? chatChannelMapKey(scopeTid) : null;
+    const messagePool = scopeKey
+      ? allMessageObjects.value.filter(
+          (obj) => chatChannelMapKey(messageThreadId(obj)) === scopeKey,
+        )
+      : allMessageObjects.value;
+    for (const o of messagePool) {
       const a = messageActor(o);
       if (a) s.add(a);
     }
     return [...s].toSorted((a, b) => String(a).localeCompare(String(b)));
   });
+
+  function clearPeopleFilter() {
+    peopleFilterActors.value = [];
+  }
+
+  function togglePeopleFilterActor(actor) {
+    if (!actor) return;
+    const cur = peopleFilterActors.value;
+    if (cur.includes(actor)) {
+      peopleFilterActors.value = cur.filter((a) => a !== actor);
+    } else {
+      peopleFilterActors.value = [...cur, actor].toSorted((a, b) =>
+        String(a).localeCompare(String(b)),
+      );
+    }
+  }
+
+  function isPeopleFilterActorSelected(actor) {
+    return actor ? peopleFilterActors.value.includes(actor) : false;
+  }
+
+  watch(
+    peopleFilterOptions,
+    (opts) => {
+      const allowed = new Set(opts);
+      const next = peopleFilterActors.value.filter((a) => allowed.has(a));
+      if (next.length !== peopleFilterActors.value.length) {
+        peopleFilterActors.value = next;
+      }
+    },
+    { flush: "post" },
+  );
 
   const { objects: recentSearchObjectsRaw, poll: pollRecentSearches } = useGraffitiDiscover(
     () => [personalCh.value],
@@ -1208,7 +1294,7 @@ export function useMessagesState() {
       },
       session.value,
     );
-    void pollChatUpdates();
+    await Promise.resolve(pollChatUpdates());
   }
 
   async function renameChat(chatObj) {
@@ -1305,6 +1391,7 @@ export function useMessagesState() {
         await postUpdateChat(chatObj, [...eff, actor]);
         manageRecipientInput.value = "";
         isManagingPeople.value = false;
+        showToast("Person added to the chat");
       } catch (err) {
         alertGraffitiPostFailed("Add person", err);
       }
@@ -1453,12 +1540,6 @@ export function useMessagesState() {
     pollPersonalObjects();
   }
 
-  function messageThreadId(obj) {
-    const chs = obj.channels;
-    if (Array.isArray(chs) && chs.length) return chs[0];
-    return null;
-  }
-
   function chatForChannel(cid) {
     if (!cid) return null;
     const ck = chatChannelMapKey(cid);
@@ -1487,9 +1568,10 @@ export function useMessagesState() {
       : allMessageObjects.value;
     const q = searchQuery.value.trim().toLowerCase();
     const words = q.split(/\s+/).filter(Boolean);
+    const peopleActive = peopleFilterActors.value.length > 0;
     const adv =
       mediaFilter.value !== "any" ||
-      peopleFilter.value !== "any" ||
+      peopleActive ||
       Boolean(String(dateFrom.value || "").trim()) ||
       Boolean(String(dateTo.value || "").trim());
     const fromMs = adv ? dayStartMs(dateFrom.value) : null;
@@ -1507,8 +1589,10 @@ export function useMessagesState() {
       if (fromMs != null && ts < fromMs) return false;
       if (toMs != null && ts > toMs) return false;
 
-      if (peopleFilter.value !== "any" && messageActor(obj) !== peopleFilter.value)
-        return false;
+      if (peopleActive) {
+        const act = messageActor(obj);
+        if (!peopleFilterActors.value.includes(act)) return false;
+      }
 
       let okMedia = true;
       if (mediaFilter.value === "text")
@@ -1521,8 +1605,15 @@ export function useMessagesState() {
       else if (mediaFilter.value === "images")
         okMedia =
           (obj.value.mediaType || "") === "image" ||
-          Boolean(obj.value.attachmentUrl) ||
-          /\.(png|jpe?g|gif|webp)/i.test(content);
+          /\.(png|jpe?g|gif|webp)/i.test(content) ||
+          (Boolean(obj.value.attachmentUrl) &&
+            !/\.(mp4|webm|mov|m4v|ogv|avi)(\?|$)/i.test(String(obj.value.attachmentUrl)));
+      else if (mediaFilter.value === "videos")
+        okMedia =
+          (obj.value.mediaType || "") === "video" ||
+          /\.(mp4|webm|mov|m4v|ogv|avi)(\?[^"'>\s]*)?/i.test(content) ||
+          (Boolean(obj.value.attachmentUrl) &&
+            /\.(mp4|webm|mov|m4v|ogv|avi)(\?|$)/i.test(String(obj.value.attachmentUrl)));
       else if (mediaFilter.value === "files")
         okMedia = /\.(pdf|zip|docx?)/i.test(content);
       else if (mediaFilter.value === "chat") okMedia = true;
@@ -1675,7 +1766,10 @@ export function useMessagesState() {
     selectChat,
     searchQuery,
     mediaFilter,
-    peopleFilter,
+    peopleFilterActors,
+    clearPeopleFilter,
+    togglePeopleFilterActor,
+    isPeopleFilterActorSelected,
     peopleFilterOptions,
     searchThreadScopeSelect,
     searchScopeSelectValue,
@@ -1685,6 +1779,7 @@ export function useMessagesState() {
     searchScopeSummaryLabel,
     pickSearchScope,
     searchRunButtonLabel,
+    searchCanSubmit,
     messageThreadId,
     chatForChannel,
     searchScopedChat,

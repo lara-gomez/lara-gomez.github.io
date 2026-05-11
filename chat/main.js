@@ -18,6 +18,8 @@ export default async () => ({
     const composerInput = ref(null);
     /** True iff the user is at (or close to) the bottom of the thread list. */
     const atBottom = ref(true);
+    /** After sending from the composer, keep thread at bottom instead of `#m-` deep link. */
+    const preferThreadBottomOverHash = ref(false);
 
     function isNearBottom(el) {
       if (!el) return true;
@@ -114,6 +116,10 @@ export default async () => ({
     );
 
     watch(threadScrollDigest, () => {
+      if (hashMessageId() && !preferThreadBottomOverHash.value) {
+        tryScrollToHashMessage();
+        return;
+      }
       const arr = props.messages.sortedMessageObjects?.value ?? [];
       const last = arr[arr.length - 1];
       const lastSender = last ? (last.value?.sender || last.actor) : null;
@@ -128,6 +134,7 @@ export default async () => ({
     watch(
       () => props.chatId,
       () => {
+        preferThreadBottomOverHash.value = false;
         if (hashMessageId()) tryScrollToHashMessage();
         else forceScrollToBottom();
       },
@@ -136,6 +143,7 @@ export default async () => ({
     watch(
       () => route.hash,
       (h) => {
+        preferThreadBottomOverHash.value = false;
         if (h && h.startsWith("#m-")) tryScrollToHashMessage();
       },
     );
@@ -158,6 +166,7 @@ export default async () => ({
     );
 
     function onComposerEnter() {
+      preferThreadBottomOverHash.value = true;
       props.messages.sendMessage();
       nextTick(() => {
         autoSizeComposer();

@@ -21,7 +21,7 @@
                     <button
                         type="submit"
                         class="search-go-btn"
-                        :disabled="!chats.length || !searchQuery.trim()"
+                        :disabled="!chats.length || !searchCanSubmit"
                     >
                         Search
                     </button>
@@ -75,31 +75,62 @@
                                 <option value="any">Any</option>
                                 <option value="text">Text only</option>
                                 <option value="images">Images</option>
+                                <option value="videos">Videos</option>
                                 <option value="links">Links</option>
                                 <option value="files">Files</option>
                             </select>
                         </div>
                         <div class="home-search-panel-section">
                             <span class="home-search-panel-label">From person</span>
-                            <div class="person-chips home-search-person-chips">
-                                <button
-                                    type="button"
-                                    class="p-chip"
-                                    :class="{ on: peopleFilter === 'any' }"
-                                    @click="peopleFilter = 'any'"
+                            <div class="home-search-from-person-stack">
+                                <div class="home-search-anyone-row">
+                                    <button
+                                        type="button"
+                                        class="p-chip"
+                                        :class="{ on: !peopleFilterActors.length }"
+                                        :aria-pressed="!peopleFilterActors.length ? 'true' : 'false'"
+                                        @click="clearPeopleFilter"
+                                    >
+                                        Anyone
+                                    </button>
+                                </div>
+                                <div class="home-search-contact-filter-row">
+                                    <label for="home-contact-filter" class="visually-hidden"
+                                        >Filter people by name or id</label>
+                                    <input
+                                        id="home-contact-filter"
+                                        v-model="contactFilter"
+                                        class="home-search-contact-filter-input"
+                                        type="search"
+                                        autocomplete="off"
+                                        placeholder="Filter by name"
+                                        aria-label="Filter people by name or id"
+                                    />
+                                </div>
+                                <div class="home-search-person-scroll">
+                                    <div class="person-chips home-search-person-chips">
+                                        <button
+                                            v-for="a in filteredPeopleFilterOptions"
+                                            :key="a"
+                                            type="button"
+                                            class="p-chip"
+                                            :class="{ on: isPeopleFilterActorSelected(a) }"
+                                            :aria-pressed="isPeopleFilterActorSelected(a) ? 'true' : 'false'"
+                                            @click="togglePeopleFilterActor(a)"
+                                        >
+                                            <UserName :actor="a" />
+                                        </button>
+                                    </div>
+                                </div>
+                                <p v-if="contactFilterNoMatch" class="home-search-contact-empty">
+                                    No contacts match.
+                                </p>
+                                <p
+                                    v-if="peopleFilterActors.length > 1"
+                                    class="home-search-from-hint"
                                 >
-                                    Anyone
-                                </button>
-                                <button
-                                    v-for="a in peopleFilterOptions"
-                                    :key="a"
-                                    type="button"
-                                    class="p-chip"
-                                    :class="{ on: peopleFilter === a }"
-                                    @click="peopleFilter = a"
-                                >
-                                    <UserName :actor="a" />
-                                </button>
+                                    Showing messages from any of the selected people.
+                                </p>
                             </div>
                         </div>
                         <div class="home-search-panel-section home-search-dates">
