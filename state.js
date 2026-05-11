@@ -8,6 +8,7 @@ import {
 } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { contentSearchHaystack } from "./linkify.js";
+import { MESSAGE_UNSEND_MS } from "./unsend-constants.js";
 import {
   useGraffiti,
   useGraffitiSession,
@@ -82,6 +83,8 @@ const schemaMessage = {
         activity: { type: "string" },
         type: { type: "string" },
         sender: { type: "string" },
+        /** Who removed the message (same channel as `Send` messages). */
+        unsentBy: { type: "string" },
         /** URL from `graffiti.postMedia` (see assets/graffiti.md). */
         attachmentUrl: { type: "string" },
       },
@@ -89,7 +92,8 @@ const schemaMessage = {
   },
 };
 
-const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+/** Graffiti `postMedia` limit (images, video, etc.). */
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 
 const schemaRecentSearch = {
   properties: {
@@ -279,13 +283,23 @@ function buildCreateChatPost(channelId, participants) {
   };
 }
 
-function buildSendMessagePost(threadChannel, content, senderActor, attachmentUrl) {
+function buildSendMessagePost(
+  threadChannel,
+  content,
+  senderActor,
+  attachmentUrl,
+  attachmentMediaType,
+) {
+  let mediaType = "text";
+  if (attachmentUrl) {
+    mediaType = attachmentMediaType === "video" ? "video" : "image";
+  }
   const value = {
     activity: "Send",
     type: "Message",
     content: content || "",
     sender: senderActor,
-    mediaType: attachmentUrl ? "image" : "text",
+    mediaType,
     published: Date.now(),
   };
   if (attachmentUrl) {
@@ -293,6 +307,22 @@ function buildSendMessagePost(threadChannel, content, senderActor, attachmentUrl
   }
   return {
     value,
+    channels: [threadChannel],
+  };
+}
+
+function buildUnsendReceiptPost(threadChannel, originalMessage, unsentByActor) {
+  const pub = Number(originalMessage.value?.published);
+  return {
+    value: {
+      activity: "UnsendNotice",
+      type: "Message",
+      content: "",
+      published: Number.isFinite(pub) && pub > 0 ? pub : Date.now(),
+      sender: messageActor(originalMessage),
+      unsentBy: unsentByActor,
+      mediaType: "text",
+    },
     channels: [threadChannel],
   };
 }
@@ -330,10 +360,10 @@ export function useMessagesState() {
 
   const channel = ref(null);
   const myMessage = ref("");
-  /** Pending image for the next send (`File` from `<input type="file">`). */
-  const selectedImageFile = ref(null);
+  /** Pending image or video for the next send (`File` from `<input type="file">`). */
+  const selectedMediaFile = ref(null);
   /** Bumps to reset the file input after send/clear. */
-  const imageInputKey = ref(0);
+  const mediaInputKey = ref(0);
   /** Resolved actor ids (excluding me) chosen one-at-a-time in compose. */
   const pendingRecipients = ref([]);
   const pendingRecipientInput = ref("");
@@ -355,6 +385,16 @@ export function useMessagesState() {
   const dateTo = ref("");
   const searchResults = ref([]);
 
+  /** Drop in-progress search UI when leaving Chats/results for Pinned (see route watch on `saved`). */
+  function clearTransientSearchState() {
+    searchQuery.value = "";
+    mediaFilter.value = "any";
+    peopleFilterActors.value = [];
+    dateFrom.value = "";
+    dateTo.value = "";
+    searchResults.value = [];
+  }
+
   /** Lightweight global toast: { text, key } shown by the layout shell. */
   const toast = ref(null);
   let toastTimer;
@@ -368,36 +408,40 @@ export function useMessagesState() {
     }, ms);
   }
 
-  function handleImageSelect(event) {
+  function handleMediaSelect(event) {
     const file = event.target.files?.[0];
     if (!file) {
-      selectedImageFile.value = null;
+      selectedMediaFile.value = null;
       return;
     }
-    if (!file.type.startsWith("image/")) {
-      window.alert("Please choose an image file.");
-      selectedImageFile.value = null;
+    const isImage = file.type.startsWith("image/");
+    const isVideo = file.type.startsWith("video/");
+    if (!isImage && !isVideo) {
+      window.alert("Please choose an image or video file.");
+      selectedMediaFile.value = null;
       event.target.value = "";
       return;
     }
-    if (file.size > MAX_IMAGE_BYTES) {
-      window.alert("Images must be 25 MB or smaller (Graffiti media limit).");
-      selectedImageFile.value = null;
+    if (file.size > MAX_MEDIA_BYTES) {
+      window.alert(
+        "Attachments must be 25 MB or smaller (Graffiti media limit). For video, try a shorter clip or compress before uploading.",
+      );
+      selectedMediaFile.value = null;
       event.target.value = "";
       return;
     }
-    selectedImageFile.value = file;
+    selectedMediaFile.value = file;
   }
 
-  function clearPendingImage() {
-    selectedImageFile.value = null;
-    imageInputKey.value += 1;
+  function clearPendingMedia() {
+    selectedMediaFile.value = null;
+    mediaInputKey.value += 1;
   }
 
-  const pendingImageName = computed(() => selectedImageFile.value?.name ?? "");
+  const pendingMediaName = computed(() => selectedMediaFile.value?.name ?? "");
 
   watch(channel, (ch, prev) => {
-    if (prev !== ch) clearPendingImage();
+    if (prev !== ch) clearPendingMedia();
   });
 
   /** `?thread=` on Chats (home) / results — null means all conversations. */
@@ -867,6 +911,7 @@ export function useMessagesState() {
     if (v.attachmentUrl) {
       const c = String(v.content || "").trim();
       if (c && c !== " ") return c.length > 100 ? `${c.slice(0, 98)}…` : c;
+      if ((v.mediaType || "").toLowerCase() === "video") return "Video";
       return "Photo";
     }
     const c = String(v.content || "").trim();
@@ -1107,6 +1152,7 @@ export function useMessagesState() {
   watch(
     () => route.name,
     (n) => {
+      if (n === "saved") clearTransientSearchState();
       if (n === "saved" || n === "home" || n === "search-results") pollPersonalObjects();
     },
   );
@@ -1452,7 +1498,7 @@ export function useMessagesState() {
 
   async function sendMessage() {
     const text = myMessage.value.trim();
-    const file = selectedImageFile.value;
+    const file = selectedMediaFile.value;
     if (!channel.value || (!text && !file)) return;
 
     isSending.value = true;
@@ -1462,21 +1508,23 @@ export function useMessagesState() {
         try {
           attachmentUrl = await graffiti.postMedia({ data: file }, session.value);
         } catch (err) {
-          alertGraffitiPostFailed("Image upload", err);
+          alertGraffitiPostFailed("Media upload", err);
           return;
         }
       }
+      const attachmentMediaType = file?.type?.startsWith("video/") ? "video" : "image";
       try {
         const postBody = buildSendMessagePost(
           channel.value,
           text || (attachmentUrl ? " " : ""),
           session.value.actor,
           attachmentUrl,
+          file ? attachmentMediaType : undefined,
         );
         await graffiti.post(postBody, session.value);
         markChannelRead(channel.value, postBody.value.published);
         myMessage.value = "";
-        clearPendingImage();
+        clearPendingMedia();
       } catch (err) {
         alertGraffitiPostFailed("Message", err);
       }
@@ -1485,18 +1533,42 @@ export function useMessagesState() {
     }
   }
 
-  async function deleteMessage(message) {
+  async function eraseMessageFromServer(message) {
+    const mediaUrl = message.value?.attachmentUrl;
+    if (mediaUrl) {
+      try {
+        await graffiti.deleteMedia(mediaUrl, session.value);
+      } catch (e) {
+        console.warn("deleteMedia:", e);
+      }
+    }
+    await graffiti.delete(message, session.value);
+  }
+
+  /**
+   * Remove a message you sent within {@link MESSAGE_UNSEND_MS}, then post a
+   * thread-visible receipt so others see that something was unsent.
+   */
+  async function unsendMessage(message) {
+    const me = session.value?.actor;
+    if (!me || messageActor(message) !== me) return;
+    if (message.value?.activity === "UnsendNotice") return;
+    const pub = Number(message.value?.published);
+    if (!Number.isFinite(pub) || pub <= 0) return;
+    if (Date.now() - pub >= MESSAGE_UNSEND_MS) return;
+    const threadCh = messageThreadId(message);
+    if (!threadCh) return;
+
     isDeleting.value.add(message.url);
     try {
-      const mediaUrl = message.value?.attachmentUrl;
-      if (mediaUrl) {
-        try {
-          await graffiti.deleteMedia(mediaUrl, session.value);
-        } catch (e) {
-          console.warn("deleteMedia:", e);
-        }
-      }
-      await graffiti.delete(message, session.value);
+      await unpinMessageByUrl(message.url);
+      await eraseMessageFromServer(message);
+      await graffiti.post(
+        buildUnsendReceiptPost(threadCh, message, me),
+        session.value,
+      );
+    } catch (err) {
+      alertGraffitiPostFailed("Unsend", err);
     } finally {
       isDeleting.value.delete(message.url);
     }
@@ -1740,10 +1812,10 @@ export function useMessagesState() {
   return {
     channel,
     myMessage,
-    imageInputKey,
-    handleImageSelect,
-    clearPendingImage,
-    pendingImageName,
+    mediaInputKey,
+    handleMediaSelect,
+    clearPendingMedia,
+    pendingMediaName,
     pendingRecipients,
     pendingRecipientInput,
     isAddingRecipient,
@@ -1759,7 +1831,7 @@ export function useMessagesState() {
     areMessageObjectsLoading,
     sortedMessageObjects,
     sendMessage,
-    deleteMessage,
+    unsendMessage,
     deleteChat,
     createConversation,
     chats: chatsSortedForDisplay,

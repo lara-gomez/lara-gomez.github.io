@@ -1131,17 +1131,6 @@ a.btn-plus {
     border: 1px solid rgba(124, 108, 200, 0.2);
     box-shadow: 0 1px 3px rgba(55, 45, 95, 0.08);
 }
-.message-bubble .message-bubble-kebab {
-    background: transparent;
-    border-color: transparent;
-    box-shadow: none;
-}
-.message-bubble:hover .message-bubble-kebab,
-.message-row.message-row-menu-open .message-bubble-kebab {
-    background: rgba(255, 255, 255, 0.75);
-    border-color: rgba(124, 108, 200, 0.18);
-    box-shadow: 0 1px 2px rgba(55, 45, 95, 0.06);
-}
 .msg-list .chat-main .chat-bubble-menu .message-menu-pop {
     right: 0;
     left: auto;
@@ -2220,36 +2209,89 @@ button.back-link {
     border-color: rgba(107, 127, 215, 0.4);
     background: rgba(255, 255, 255, 0.95);
 }
-/* Layout shell only — keeps kebab inset without a heavy “card” per message. */
+/* Room for pin / unsend along the top edge of the bubble. */
 .message-bubble {
     position: relative;
-    padding: 2px 36px 0 0;
+    padding: 2px 0 0 0;
+    padding-inline-end: min(42%, 200px);
 }
-/* z-index on the <li> so the open menu stacks above the next message row (popover extends below). */
-.message-row.message-row-menu-open {
-    position: relative;
-    z-index: 25;
-}
-.message-bubble .message-bubble-menu {
+.message-bubble .message-actions {
     position: absolute;
     top: 0;
-    right: 0;
-    margin-left: 0;
+    inset-inline-end: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px 8px;
     z-index: 2;
+    max-width: min(42%, 200px);
 }
-.message-bubble .message-bubble-menu .message-menu-pop {
-    right: 0;
-    left: auto;
-    z-index: 40;
+.message-pin-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.55);
+    color: var(--text);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0;
+    font-family: inherit;
+    opacity: 0.72;
+    transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.message-pin-btn:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(124, 108, 200, 0.22);
+}
+.message-pin-btn[aria-pressed="true"] {
+    opacity: 1;
+    border-color: rgba(124, 108, 200, 0.35);
+    background: rgba(107, 127, 215, 0.12);
+}
+.message-unsend-btn {
+    border: none;
+    background: transparent;
+    padding: 2px 4px;
+    font-size: 0.74rem;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 4px;
+    white-space: nowrap;
+    color: var(--muted);
+    font-weight: 500;
+}
+.message-unsend-btn:hover:not(:disabled) {
+    color: var(--text);
+    background: rgba(107, 127, 215, 0.08);
+}
+.message-unsend-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+.message-bubble.message-bubble-receipt {
+    padding: 6px 0 2px;
+    padding-inline-end: 0;
+}
+.message-row-receipt .message-unsent-receipt {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--muted);
+    font-style: italic;
+    line-height: 1.35;
+}
+.message-row-receipt .message-time-receipt {
+    display: block;
+    margin-top: 4px;
 }
 @media (hover: hover) and (pointer: fine) {
-    .message-bubble .message-bubble-kebab {
-        opacity: 0;
-        transition: opacity 0.12s ease;
-    }
-    .message-bubble:hover .message-bubble-kebab,
-    .message-row.message-row-menu-open .message-bubble-kebab {
-        opacity: 1;
+    .message-bubble:not(:hover) .message-pin-btn[aria-pressed="false"] {
+        opacity: 0.35;
     }
 }
 .message-row .message-meta {
@@ -2295,7 +2337,7 @@ button.back-link {
     border-radius: 3px;
     padding: 0 2px;
 }
-/* `.message-actions`, `.message-pin`, `.message-del` were removed in favor of the shared kebab `.message-menu`. */
+/* Message list uses `.message-actions` (pin / unsend / delete); chat card still uses kebab `.message-menu`. */
 .pin-list-page {
     padding: 0;
     display: flex;
@@ -2347,6 +2389,67 @@ button.back-link {
 }
 .message-image-block {
     margin-top: 10px;
+}
+.message-video-block {
+    margin-top: 10px;
+}
+.message-video-heading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--navy-soft);
+}
+.message-video-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 999px;
+    background: linear-gradient(145deg, #e8e4ff, #f5f3ff);
+    border: 1px solid rgba(107, 127, 215, 0.35);
+    font-size: 0.62rem;
+    line-height: 1;
+    padding-left: 1px;
+    box-sizing: border-box;
+}
+.message-video-title {
+    letter-spacing: 0.02em;
+}
+.message-video-inner {
+    display: block;
+    max-width: min(100%, 360px);
+    border-radius: var(--radius);
+    overflow: visible;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+    background: #0f1118;
+}
+.message-video-inner graffiti-get-media {
+    display: block;
+    max-width: 100%;
+}
+.message-video-el {
+    width: 100%;
+    max-height: min(50vh, 280px);
+    display: block;
+    border-radius: var(--radius);
+    vertical-align: bottom;
+}
+.message-video-status {
+    margin: 0;
+    padding: 14px 12px;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.75);
+    text-align: center;
+}
+.message-video-hint {
+    margin: 6px 0 0;
+    font-size: 0.72rem;
+    color: var(--muted);
+    line-height: 1.35;
 }
 .message-image {
     display: inline-block;
@@ -2401,13 +2504,23 @@ button.back-link {
 }
 .result-thumb {
     margin-top: 8px;
-    max-width: 280px;
+    max-width: min(100%, 360px);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: #0f1118;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 .result-thumb graffiti-get-media,
-.result-thumb img {
+.result-thumb img,
+.result-thumb video {
     max-width: 100%;
+    width: 100%;
+    max-height: min(50vh, 280px);
     height: auto;
+    object-fit: contain;
+    display: block;
     border-radius: var(--radius);
+    vertical-align: bottom;
 }
 .composer input[type="text"],
 .composer .composer-textarea {

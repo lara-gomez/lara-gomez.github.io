@@ -65,7 +65,7 @@
                         <div v-if="obj.value.attachmentUrl" class="result-thumb">
                             <graffiti-get-media
                                 :url="obj.value.attachmentUrl"
-                                :accept="{ types: ['image/*'] }"
+                                :accept="{ types: ['image/*', 'video/*'] }"
                             ></graffiti-get-media>
                         </div>
                         <div class="pin-row">

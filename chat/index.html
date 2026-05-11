@@ -111,13 +111,13 @@
             <form class="composer composer-with-media" @submit.prevent="sendMessage()">
                 <label class="composer-photo-btn">
                     <input
-                        :key="imageInputKey"
+                        :key="mediaInputKey"
                         type="file"
                         class="composer-photo-input"
-                        accept="image/*"
-                        @change="handleImageSelect"
+                        accept="image/*,video/*"
+                        @change="handleMediaSelect"
                     />
-                    <span class="composer-photo-label">Add photo</span>
+                    <span class="composer-photo-label">Add photo or video</span>
                 </label>
                 <textarea
                     ref="composerInput"
@@ -132,16 +132,16 @@
                     type="submit"
                     class="composer-send"
                     :class="{ 'composer-send-sending': isSending }"
-                    :disabled="isSending || (!myMessage.trim() && !pendingImageName)"
+                    :disabled="isSending || (!myMessage.trim() && !pendingMediaName)"
                 >
                     <span class="composer-send-label">{{ isSending ? "Sending…" : "Send" }}</span>
                 </button>
             </form>
-            <p v-if="pendingImageName" class="composer-pending">
-                <span class="composer-pending-name" :title="pendingImageName">
-                    Attached: {{ pendingImageName }}
+            <p v-if="pendingMediaName" class="composer-pending">
+                <span class="composer-pending-name" :title="pendingMediaName">
+                    Attached: {{ pendingMediaName }}
                 </span>
-                <button type="button" class="composer-pending-remove" @click="clearPendingImage">
+                <button type="button" class="composer-pending-remove" @click="clearPendingMedia">
                     Remove
                 </button>
             </p>

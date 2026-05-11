@@ -1,6 +1,12 @@
-import { defineAsyncComponent, ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { defineAsyncComponent, ref, computed, watch, onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
+import { useGraffitiSession } from "@graffiti-garden/wrapper-vue";
+import { MESSAGE_UNSEND_MS } from "../unsend-constants.js";
 import LinkedText from "../linked-text/main.js";
+
+function messageActor(obj) {
+  return obj.value?.sender || obj.actor;
+}
 
 /** Async so route templates can register `components: { Message: MessageAsync }` without self-importing this module. */
 export const MessageAsync = defineAsyncComponent(async () => ({
@@ -11,6 +17,7 @@ export const MessageAsync = defineAsyncComponent(async () => ({
   },
   setup(props) {
     const router = useRouter();
+    const session = useGraffitiSession();
 
     function formatPublished(ts) {
       const n = Number(ts);
@@ -32,21 +39,53 @@ export const MessageAsync = defineAsyncComponent(async () => ({
       imageExpanded.value = !imageExpanded.value;
     }
 
-    const menuOpen = ref(false);
-    const menuRoot = ref(null);
-    function toggleMenu() {
-      menuOpen.value = !menuOpen.value;
+    const isUnsendReceipt = computed(
+      () => props.object.value?.activity === "UnsendNotice",
+    );
+
+    const isMine = computed(() => {
+      const me = session.value?.actor;
+      return Boolean(me && messageActor(props.object) === me);
+    });
+
+    const unsendAvailable = ref(false);
+    let unsendExpiryTimer;
+    function clearUnsendTimer() {
+      if (unsendExpiryTimer !== undefined) {
+        clearTimeout(unsendExpiryTimer);
+        unsendExpiryTimer = undefined;
+      }
     }
-    function closeMenu() {
-      menuOpen.value = false;
+    function syncUnsendWindow() {
+      clearUnsendTimer();
+      unsendAvailable.value = false;
+      if (isUnsendReceipt.value) return;
+      if (!isMine.value) return;
+      const pub = Number(props.object.value?.published);
+      if (!Number.isFinite(pub) || pub <= 0) return;
+      const elapsed = Date.now() - pub;
+      if (elapsed >= MESSAGE_UNSEND_MS) return;
+      unsendAvailable.value = true;
+      unsendExpiryTimer = setTimeout(() => {
+        unsendAvailable.value = false;
+        unsendExpiryTimer = undefined;
+      }, MESSAGE_UNSEND_MS - elapsed);
     }
-    function onDocClick(ev) {
-      if (!menuOpen.value) return;
-      const root = menuRoot.value;
-      if (root && !root.contains(ev.target)) closeMenu();
-    }
-    onMounted(() => document.addEventListener("mousedown", onDocClick));
-    onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
+    watch(
+      [
+        isMine,
+        isUnsendReceipt,
+        () => props.object.value?.published,
+        () => session.value?.actor,
+      ],
+      syncUnsendWindow,
+      { immediate: true },
+    );
+    onBeforeUnmount(clearUnsendTimer);
+
+    const showUnsend = computed(
+      () => isMine.value && unsendAvailable.value && !isUnsendReceipt.value,
+    );
 
     const isPinned = computed(() => {
       const set = props.messages.pinnedMessageUrls?.value;
@@ -56,38 +95,37 @@ export const MessageAsync = defineAsyncComponent(async () => ({
     const messageDomId = computed(() => `m-${encodeURIComponent(props.object.url)}`);
     const sentAtLabel = computed(() => formatPublished(props.object?.value?.published));
 
-    function handlePin() {
-      closeMenu();
-      props.messages.pinMessage(props.object);
+    const isVideoAttachment = computed(() => {
+      const v = props.object.value;
+      if (!v?.attachmentUrl) return false;
+      if ((v.mediaType || "").toLowerCase() === "video") return true;
+      return /\.(mp4|webm|mov|m4v|ogv|avi)(\?|$)/i.test(String(v.attachmentUrl));
+    });
+
+    function togglePin() {
+      if (isUnsendReceipt.value) return;
+      if (isPinned.value) props.messages.unpinMessageByUrl?.(props.object.url);
+      else props.messages.pinMessage(props.object);
     }
-    function handleUnpin() {
-      closeMenu();
-      props.messages.unpinMessageByUrl?.(props.object.url);
-    }
-    function handleDelete() {
-      closeMenu();
-      props.messages.deleteMessage(props.object);
+    function handleUnsend() {
+      props.messages.unsendMessage(props.object);
     }
     function goPinnedPage() {
       router.push({ name: "saved" });
     }
 
     return {
-      deleteMessage: props.messages.deleteMessage,
       isDeleting: props.messages.isDeleting,
-      pinMessage: props.messages.pinMessage,
+      isUnsendReceipt,
       imageExpanded,
       toggleImageExpand,
-      menuOpen,
-      menuRoot,
-      toggleMenu,
-      closeMenu,
       isPinned,
       messageDomId,
       sentAtLabel,
-      handlePin,
-      handleUnpin,
-      handleDelete,
+      isVideoAttachment,
+      togglePin,
+      handleUnsend,
+      showUnsend,
       goPinnedPage,
     };
   },

@@ -1,89 +1,114 @@
-<li class="message-row" :class="{ 'message-row-menu-open': menuOpen }" :id="messageDomId">
-    <div class="message-bubble">
-        <div class="message-menu message-bubble-menu" ref="menuRoot" @click.stop>
-            <button
-                type="button"
-                class="kebab-btn message-bubble-kebab"
-                :aria-expanded="menuOpen ? 'true' : 'false'"
-                aria-haspopup="menu"
-                title="More actions"
-                aria-label="More actions"
-                @click.stop="toggleMenu"
-            >
-                ⋯
-            </button>
-            <div v-if="menuOpen" class="message-menu-pop" role="menu">
+<li
+    class="message-row"
+    :class="{ 'message-row-receipt': isUnsendReceipt }"
+    :id="messageDomId"
+>
+    <template v-if="isUnsendReceipt">
+        <div class="message-bubble message-bubble-receipt">
+            <p class="message-unsent-receipt" role="status">
+                <UserName :actor="object.value.unsentBy || object.value.sender || object.actor" />
+                unsent a message.
+            </p>
+            <span v-if="sentAtLabel" class="message-time message-time-receipt">{{ sentAtLabel }}</span>
+        </div>
+    </template>
+    <template v-else>
+        <div class="message-bubble">
+            <div class="message-actions" @click.stop>
                 <button
-                    v-if="!isPinned"
                     type="button"
-                    class="message-menu-item"
-                    role="menuitem"
-                    @click="handlePin"
+                    class="message-pin-btn"
+                    :aria-pressed="isPinned ? 'true' : 'false'"
+                    :title="isPinned ? 'Unpin' : 'Pin'"
+                    :aria-label="isPinned ? 'Unpin message' : 'Pin message'"
+                    @click="togglePin"
                 >
-                    Pin
+                    📌
                 </button>
                 <button
-                    v-else
+                    v-if="showUnsend"
                     type="button"
-                    class="message-menu-item"
-                    role="menuitem"
-                    @click="handleUnpin"
-                >
-                    Unpin
-                </button>
-                <button
-                    v-if="object.actor === $graffitiSession.value?.actor"
-                    type="button"
-                    class="message-menu-item message-menu-danger"
-                    role="menuitem"
+                    class="message-unsend-btn"
+                    title="Remove for everyone (within about one minute after send)"
                     :disabled="isDeleting.has(object.url)"
-                    @click="handleDelete"
+                    @click="handleUnsend"
                 >
-                    {{ isDeleting.has(object.url) ? "Deleting…" : "Delete" }}
+                    {{ isDeleting.has(object.url) ? "Removing…" : "Unsend" }}
                 </button>
             </div>
-        </div>
-        <div class="message-meta">
-            <strong>
-                <UserName :actor="object.value.sender || object.actor" />
-            </strong>
-            <span
-                v-if="object.value.content && object.value.content.trim()"
-                class="message-text"
-            >
-                : <LinkedText :text="object.value.content" />
-            </span>
-        </div>
-        <div v-if="object.value.attachmentUrl" class="message-image-block">
-            <div
-                class="message-image"
-                :class="{ 'message-image-expanded': imageExpanded }"
-                role="button"
-                tabindex="0"
-                :aria-expanded="imageExpanded ? 'true' : 'false'"
-                aria-label="Image attachment — tap to expand or collapse"
-                @click="toggleImageExpand"
-                @keydown.enter.prevent="toggleImageExpand"
-                @keydown.space.prevent="toggleImageExpand"
-            >
-                <graffiti-get-media
-                    :url="object.value.attachmentUrl"
-                    :accept="{ types: ['image/*'] }"
-                ></graffiti-get-media>
+            <div class="message-meta">
+                <strong>
+                    <UserName :actor="object.value.sender || object.actor" />
+                </strong>
+                <span
+                    v-if="object.value.content && object.value.content.trim()"
+                    class="message-text"
+                >
+                    : <LinkedText :text="object.value.content" />
+                </span>
             </div>
-            <p v-if="!imageExpanded" class="message-image-hint">Tap image to enlarge</p>
-        </div>
-        <div class="message-footer-meta">
-            <button
-                v-if="isPinned"
-                type="button"
-                class="pinned-chip pinned-chip-action"
-                title="Open pinned messages"
-                @click="goPinnedPage"
+            <div
+                v-if="object.value.attachmentUrl && isVideoAttachment"
+                class="message-video-block"
+                role="region"
+                aria-label="Video attachment"
             >
-                Pinned
-            </button>
-            <span v-if="sentAtLabel" class="message-time">{{ sentAtLabel }}</span>
+                <div class="message-video-heading">
+                    <span class="message-video-badge" aria-hidden="true">▶</span>
+                    <span class="message-video-title">Video</span>
+                </div>
+                <div class="message-video-inner">
+                    <graffiti-get-media
+                        :url="object.value.attachmentUrl"
+                        :accept="{ types: ['video/*', 'image/*'] }"
+                    >
+                        <template #default="{ media }">
+                            <video
+                                v-if="media && media.dataUrl"
+                                :src="media.dataUrl"
+                                controls
+                                playsinline
+                                preload="metadata"
+                                class="message-video-el"
+                            ></video>
+                            <p v-else-if="media === null" class="message-video-status">Could not load this video.</p>
+                            <p v-else class="message-video-status">Loading video…</p>
+                        </template>
+                    </graffiti-get-media>
+                </div>
+                <p class="message-video-hint">Use the play and pause controls on the player.</p>
+            </div>
+            <div v-else-if="object.value.attachmentUrl" class="message-image-block">
+                <div
+                    class="message-image"
+                    :class="{ 'message-image-expanded': imageExpanded }"
+                    role="button"
+                    tabindex="0"
+                    :aria-expanded="imageExpanded ? 'true' : 'false'"
+                    aria-label="Image attachment — tap to expand or collapse"
+                    @click="toggleImageExpand"
+                    @keydown.enter.prevent="toggleImageExpand"
+                    @keydown.space.prevent="toggleImageExpand"
+                >
+                    <graffiti-get-media
+                        :url="object.value.attachmentUrl"
+                        :accept="{ types: ['image/*', 'video/*'] }"
+                    ></graffiti-get-media>
+                </div>
+                <p v-if="!imageExpanded" class="message-image-hint">Tap image to enlarge</p>
+            </div>
+            <div class="message-footer-meta">
+                <button
+                    v-if="isPinned"
+                    type="button"
+                    class="pinned-chip pinned-chip-action"
+                    title="Open pinned messages"
+                    @click="goPinnedPage"
+                >
+                    Pinned
+                </button>
+                <span v-if="sentAtLabel" class="message-time">{{ sentAtLabel }}</span>
+            </div>
         </div>
-    </div>
+    </template>
 </li>
